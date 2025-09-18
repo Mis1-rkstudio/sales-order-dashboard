@@ -1,103 +1,154 @@
-import Image from "next/image";
+// app/page.tsx
+'use client';
 
-export default function Home() {
+import React, { JSX, useState } from 'react';
+import TokenSearchBar from '@/components/TokenSearchBar';
+import SalesOrdersTable from '@/components/SalesOrdersTable';
+import DatePresetPicker from '@/components/DatePresetPicker';
+import GroupMultiSelect from '@/components/GroupMultiSelect';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+
+type Filters = {
+  q: string;
+  tokens: string[];
+  brand: string;
+  city: string;
+  startDate: string;
+  endDate: string;
+  limit: number;
+};
+
+// group options shown in UI — must match keys used inside SalesOrdersTable
+const GROUPABLE_OPTIONS = ['Customer', 'Item', 'Color', 'Broker', 'Status'] as const;
+type GroupLabel = typeof GROUPABLE_OPTIONS[number];
+
+export default function HomePage(): JSX.Element {
+  const [filters, setFilters] = useState<Filters>({
+    q: '',
+    tokens: [],
+    brand: '',
+    city: '',
+    startDate: '',
+    endDate: '',
+    limit: 25,
+  });
+
+  // draft state the user can edit before pressing Apply
+  const [draft, setDraft] = useState({
+    tokens: filters.tokens as string[],
+    startDate: filters.startDate,
+    endDate: filters.endDate,
+    limit: filters.limit,
+  });
+
+  // group-by state is controlled here and passed to the table
+  const [groupBy, setGroupBy] = useState<GroupLabel[]>(['Customer']); // default grouped by Customer
+
+  // add/remove tokens in draft
+  function addToken(token: string) {
+    setDraft((d) => ({ ...d, tokens: Array.from(new Set([...d.tokens, token])) }));
+  }
+  function removeToken(token: string) {
+    setDraft((d) => ({ ...d, tokens: d.tokens.filter((t) => t !== token) }));
+  }
+
+  // Clear tokens (from draft) AND apply immediately so table refreshes
+  function onTokenClear() {
+    setDraft((d) => ({ ...d, tokens: [] }));
+    setFilters((f) => ({ ...f, tokens: [] }));
+  }
+
+  // Clear date selection from draft AND apply immediately so table refreshes
+  function onDateClear() {
+    setDraft((d) => ({ ...d, startDate: '', endDate: '' }));
+    setFilters((f) => ({ ...f, startDate: '', endDate: '' }));
+  }
+
+  // global clear: reset both filters & draft (already applied immediately)
+  function onClearAll() {
+    const empty = {
+      q: '',
+      tokens: [] as string[],
+      brand: '',
+      city: '',
+      startDate: '',
+      endDate: '',
+      limit: 25,
+    };
+    setFilters(empty);
+    setDraft({ tokens: [], startDate: '', endDate: '', limit: 25 });
+    setGroupBy(['Customer']);
+  }
+
+  // Apply draft to filters (user explicit Apply)
+  function onApply() {
+    setFilters((s) => ({
+      ...s,
+      tokens: draft.tokens,
+      startDate: draft.startDate,
+      endDate: draft.endDate,
+      limit: draft.limit,
+    }));
+  }
+
+  // When GroupMultiSelect calls onChange provide fallback to Customer if user clears selection
+  function onGroupChange(selected: string[]) {
+    if (selected.length === 0) {
+      setGroupBy(['Customer']);
+    } else {
+      // ensure we keep the order defined by GROUPABLE_OPTIONS
+      const ordered = GROUPABLE_OPTIONS.filter((opt) => selected.includes(opt)) as GroupLabel[];
+      setGroupBy(ordered.length ? ordered : (['Customer'] as GroupLabel[]));
+    }
+  }
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <main className="p-6">
+      <h1 className="text-2xl font-bold mb-4">Kolkata Sales Orders — Home</h1>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+      <Card className="p-4 mb-4">
+        {/* Token search row */}
+        <div className="mb-4">
+          <TokenSearchBar tokens={draft.tokens} onAdd={addToken} onRemove={removeToken} onClear={onTokenClear} />
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+
+        {/* Date preset picker + Group-by controls + top actions */}
+        <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
+          <div className="flex items-center gap-2">
+            <DatePresetPicker
+              startDate={draft.startDate}
+              endDate={draft.endDate}
+              onChange={(v) => setDraft((d) => ({ ...d, startDate: v.startDate, endDate: v.endDate }))}
+              onClear={onDateClear}
+            />
+            <div className="ml-3 text-sm text-slate-500">All</div>
+          </div>
+
+          {/* Single multiselect control for Group-by */}
+          <div className="flex items-center gap-3 ml-4">
+            <GroupMultiSelect
+              options={GROUPABLE_OPTIONS as unknown as string[]}
+              value={groupBy as unknown as string[]}
+              onChange={onGroupChange}
+              placeholder="Group by"
+              className="min-w-[280px]"
+            />
+          </div>
+
+          <div className="flex items-center gap-2 ml-auto">
+            <Button variant="ghost" onClick={onClearAll}>
+              Clear
+            </Button>
+
+            {/* Apply commits draft -> filters */}
+            <Button onClick={onApply}>Apply</Button>
+          </div>
+        </div>
+      </Card>
+
+      {/* pass groupBy to the table as an array of labels (in selected order) */}
+      <SalesOrdersTable filters={filters} groupBy={groupBy as unknown as string[]} />
+    </main>
   );
 }
