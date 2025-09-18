@@ -159,7 +159,6 @@ export async function GET(request: Request) {
     FROM ${tableRef}
     ${whereSql}
     ORDER BY ${sortBy} ${order}
-    LIMIT @limit OFFSET @offset
   `;
 
   const countSql = `

@@ -5,10 +5,11 @@ import React, { JSX, useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 
 type Props = {
-  url?: string | null;
+  url?: string | URL | null;
   size?: number; // px, default 48
   className?: string;
   alt?: string;
+  link?: boolean; // whether to wrap in <a> (default true)
 };
 
 /** small inline SVG placeholder as data URL (light gray) */
@@ -60,19 +61,27 @@ function safeTrim(value?: string | null): string {
  * - Attempts raw URL first, then Google-Drive normalized URLs (if applicable).
  * - Uses next/image with `unoptimized` to avoid build-time domain config.
  * - Shows placeholder when no image is available or all attempts fail.
- * - Clicking thumbnail opens the image in a new tab.
+ * - When `link` is true (default) it renders an <a>; otherwise it renders only the image wrapped in a span.
  */
 export default function FileThumbnail({
   url,
   size = 48,
   className = '',
   alt = 'file',
+  link = true,
 }: Props): JSX.Element | null {
-  // --- Hooks must run unconditionally and in the same order ---
-  const raw = useMemo(() => safeTrim(url), [url]);
+  const raw = useMemo(() => {
+    if (typeof url === 'string' || url == null) {
+      return safeTrim(url);
+    }
+    if (url instanceof URL) {
+      return safeTrim(url.toString());
+    }
+    return '';
+  }, [url]);
 
   const initialCandidates = useMemo(() => {
-    const list = [raw];
+    const list: string[] = [raw];
     const driveId = raw ? extractDriveId(raw) : null;
     if (driveId) list.push(...driveCandidates(driveId));
     return list;
@@ -80,48 +89,60 @@ export default function FileThumbnail({
 
   const [index, setIndex] = useState<number>(0);
 
-  // reset index when raw changes
   useEffect(() => {
     setIndex(0);
   }, [raw]);
 
-  // --- Early returns (safe because hooks already ran) ---
+  // early exits (hooks already executed)
   if (!raw) return null;
   if (!raw.startsWith('http://') && !raw.startsWith('https://')) return null;
 
-  // move to next candidate or fall back to placeholder
   function tryNextSource(): void {
     const next = index + 1;
     if (next < initialCandidates.length) {
       setIndex(next);
     } else {
-      // final fallback: index beyond list -> will use placeholder below
+      // go beyond list so placeholder is used
       setIndex(initialCandidates.length);
     }
   }
 
-  // compute final src (use placeholder when out-of-range)
   const src = index < initialCandidates.length ? initialCandidates[index] : PLACEHOLDER_SVG;
-
-  // anchor href should ideally open the raw URL or the current candidate that is an http(s) URL
   const href = src && src.startsWith('http') ? src : raw;
-
-  // clamp image size to sane range
   const imgSize = Math.max(24, Math.min(96, Math.floor(size)));
 
-  return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className={`inline-block ${className}`} aria-label="Open file">
-      <Image
-        src={src}
-        width={imgSize}
-        height={imgSize}
-        alt={alt}
-        unoptimized
-        style={{ width: imgSize, height: imgSize, objectFit: 'cover', borderRadius: 6, display: 'block' }}
-        onError={() => {
-          tryNextSource();
-        }}
-      />
-    </a>
+  // typed handler for Next/Image onError
+  const handleError = (): void => {
+    tryNextSource();
+  };
+
+  // the image element (no anchor)
+  const imgElement = (
+    <Image
+      src={src}
+      width={imgSize}
+      height={imgSize}
+      alt={alt}
+      unoptimized
+      style={{
+        width: imgSize,
+        height: imgSize,
+        objectFit: 'cover',
+        borderRadius: 6,
+        display: 'block',
+      }}
+      onError={handleError}
+    />
   );
+
+  if (link) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className={`inline-block ${className}`} aria-label="Open file">
+        {imgElement}
+      </a>
+    );
+  }
+
+  // no link: return just the image wrapped for layout/aria
+  return <span className={`inline-block ${className}`} aria-hidden={false}>{imgElement}</span>;
 }

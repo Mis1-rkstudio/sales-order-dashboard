@@ -25,7 +25,7 @@ export type SalesOrderRow = {
   so_date_parsed?: string | null;
   Concept?: string | null;
   Fabric?: string | null;
-  File_URL?: string | null;
+  File_URL?: string | URL | null;
 
   Stock?: number | null;
   __uid?: string;
@@ -77,6 +77,10 @@ type Filters = {
   startDate: string;
   endDate: string;
   limit: number;
+
+  // added filters for customer & item multi-selects
+  customers?: string[];
+  items?: string[];
 };
 
 type GroupKey = "Customer" | "Item" | "Color" | "Broker" | "Status";
@@ -123,6 +127,7 @@ export default function SalesOrdersTable({
   // composite dispatched key set
   const [dispatchedSet, setDispatchedSet] = useState<Set<string>>(new Set());
 
+  // reset page when filters change (include customers/items JSON to trigger when selection changes)
   useEffect(() => {
     setPage(0);
   }, [
@@ -133,6 +138,8 @@ export default function SalesOrdersTable({
     filters.startDate,
     filters.endDate,
     JSON.stringify(groupBy),
+    JSON.stringify(filters.customers ?? []),
+    JSON.stringify(filters.items ?? []),
   ]);
 
   useEffect(() => {
@@ -189,7 +196,6 @@ export default function SalesOrdersTable({
           signal: abortCtrl.signal,
         });
         if (!res.ok) {
-          // eslint-disable-next-line no-console
           console.error("fetch failed", await res.text());
           setRows([]);
           setTotal(0);
@@ -309,15 +315,51 @@ export default function SalesOrdersTable({
         });
 
         // update UI
-        // remove rows that have Stock === 0 (only if stock is a number and exactly 0)
-        const filteredRows = rowsWithUid.filter(
-          (r) => !(typeof r.Stock === "number" && r.Stock === 0)
+        // remove rows where Stock is exactly 0 or numeric NaN
+        const filteredRows = rowsWithUid.filter((r) => {
+          // keep rows with no numeric stock info (null/undefined)
+          if (typeof r.Stock !== "number") return true;
+
+          // filter OUT rows with Stock === 0 or Stock is numeric NaN
+          if (r.Stock === 0) return false;
+          if (Number.isNaN(r.Stock)) return false;
+
+          return true;
+        });
+
+        // Now apply Customers/Items dropdown filtering (client-side)
+        // Behavior: when either customers or items selection is non-empty,
+        // only rows that match the selected customers/items are kept.
+        const selectedCustomersSet = new Set(
+          (filters.customers ?? []).map((c) => (c ?? "").toString().trim())
+        );
+        const selectedItemsSet = new Set(
+          (filters.items ?? []).map((i) => (i ?? "").toString().trim())
         );
 
-        // adjust total to reflect removed items on client (includes removed dispatched and zero-stock rows)
+        const shouldFilterByCustomers = selectedCustomersSet.size > 0;
+        const shouldFilterByItems = selectedItemsSet.size > 0;
+
+        const finalRows = filteredRows.filter((r) => {
+          const customerVal = (r.Customer ?? "").toString().trim();
+          const itemVal = (r.Item ?? "").toString().trim();
+
+          if (shouldFilterByCustomers) {
+            if (!selectedCustomersSet.has(customerVal)) return false;
+          }
+
+          if (shouldFilterByItems) {
+            if (!selectedItemsSet.has(itemVal)) return false;
+          }
+
+          return true;
+        });
+
+        // adjust total to reflect removed items on client (includes removed dispatched and zero/NaN-stock rows)
         const removedCount = Math.max(0, incoming.length - filteredRows.length);
-        setRows(filteredRows);
-        setTotal(Math.max(0, (data.total ?? 0) - removedCount));
+        const extraRemovedCount = Math.max(0, filteredRows.length - finalRows.length);
+        setRows(finalRows);
+        setTotal(Math.max(0, (data.total ?? 0) - removedCount - extraRemovedCount));
 
         setCollapsedGroups({});
         setChecked({});
@@ -418,8 +460,7 @@ export default function SalesOrdersTable({
     }
 
     return Array.from(map.values()).sort((a, b) => {
-      if (a.minTimestamp !== b.minTimestamp)
-        return a.minTimestamp - b.minTimestamp;
+      if (a.minTimestamp !== b.minTimestamp) return a.minTimestamp - b.minTimestamp;
       return a.key.localeCompare(b.key);
     });
   }, [rows, effectiveGroupKeys]);
@@ -685,7 +726,6 @@ export default function SalesOrdersTable({
                               <td className="py-2 pr-6 align-top whitespace-nowrap">
                                 {formatCell(r.OrderQty)}
                               </td>
-                              {/* <td className="py-2 pr-6 align-top">{typeof r.Stock === 'number' ? <span className="inline-block px-2 py-1 rounded-full text-sm bg-slate-800">{r.Stock}</span> : <span className="text-slate-500">—</span>}</td> */}
                               <td className="py-2 pr-6 align-top text-sm">
                                 {typeof r.Stock === "number" ? (
                                   r.Stock === 0 ? (
@@ -700,25 +740,36 @@ export default function SalesOrdersTable({
                               <td className="py-2 pr-6 align-top">
                                 {formatCell(r.Status)}
                               </td>
-                              {/* <td className="py-2 pr-6 align-top">File renderer or thumbnail cell</td> */}
                               <td
-                                className="py-2 pr-6 align-top"
                                 onClick={(e) => e.stopPropagation()}
+                                className="py-2 pr-6 align-top"
                               >
                                 {r.File_URL ? (
-                                  <a
-                                    href={r.File_URL}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    onClick={(e) => e.stopPropagation()}
+                                  <button
+                                    type="button"
+                                    className="p-0"
+                                    aria-label={`Open file for ${
+                                      r.SO_No ?? ""
+                                    }`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const url = r.File_URL;
+                                      if (!url) return; // narrows type to string
+                                      const newWin = window.open(
+                                        url,
+                                        "_blank",
+                                        "noopener,noreferrer"
+                                      );
+                                      if (newWin) newWin.opener = null;
+                                    }}
                                   >
-                                    {/* Adapt prop name to your FileThumbnail API (src || url) */}
                                     <FileThumbnail
                                       url={r.File_URL}
                                       alt={`File ${r.SO_No ?? ""}`}
                                       className="w-12 h-12 object-contain"
+                                      link={false}
                                     />
-                                  </a>
+                                  </button>
                                 ) : (
                                   <span className="text-slate-400">—</span>
                                 )}
@@ -752,3 +803,4 @@ export default function SalesOrdersTable({
     </Card>
   );
 }
+  

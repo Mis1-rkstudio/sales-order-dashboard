@@ -140,7 +140,6 @@ export async function GET(request: Request) {
     FROM ${tableRef}
     ${whereSql}
     ORDER BY ${sortBy} ${order}
-    LIMIT @limit OFFSET @offset
   `;
 
   // If you prefer to return *every* column from customer_combined, you can replace the selectSql with:

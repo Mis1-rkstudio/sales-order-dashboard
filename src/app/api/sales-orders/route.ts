@@ -1,6 +1,6 @@
 // app/api/sales-orders/route.ts
-import { NextResponse } from 'next/server';
-import { BigQuery } from '@google-cloud/bigquery';
+import { NextResponse } from "next/server";
+import { BigQuery } from "@google-cloud/bigquery";
 
 type QueryParamsIn = {
   q?: string;
@@ -33,22 +33,27 @@ export type SalesOrderRow = {
   ItemCode?: string | null;
   File_URL?: string | null;
   so_date_parsed?: string | null;
+
+  // optional: server may attach this when present
+  CustomerCity?: string | null;
 };
 
 function parseQueryParams(url: string): QueryParamsIn {
   const u = new URL(url);
   const s = u.searchParams;
   return {
-    q: s.get('q') ?? undefined,
-    tokens: s.getAll('tokens')?.length ? s.getAll('tokens') : undefined,
-    brand: s.get('brand') ?? undefined,
-    city: s.get('city') ?? undefined,
-    startDate: s.get('startDate') ?? undefined,
-    endDate: s.get('endDate') ?? undefined,
-    limit: s.get('limit') ?? undefined,
-    offset: s.get('offset') ?? undefined,
-    includeColumn: s.get('includeColumn') ?? undefined,
-    includeValues: s.getAll('includeValues')?.length ? s.getAll('includeValues') : undefined,
+    q: s.get("q") ?? undefined,
+    tokens: s.getAll("tokens")?.length ? s.getAll("tokens") : undefined,
+    brand: s.get("brand") ?? undefined,
+    city: s.get("city") ?? undefined,
+    startDate: s.get("startDate") ?? undefined,
+    endDate: s.get("endDate") ?? undefined,
+    limit: s.get("limit") ?? undefined,
+    offset: s.get("offset") ?? undefined,
+    includeColumn: s.get("includeColumn") ?? undefined,
+    includeValues: s.getAll("includeValues")?.length
+      ? s.getAll("includeValues")
+      : undefined,
   };
 }
 
@@ -56,22 +61,30 @@ function createBigQueryClient(): BigQuery {
   const projectId = process.env.BQ_PROJECT;
   const serviceKey = process.env.GCLOUD_SERVICE_KEY;
 
-  const options: { projectId?: string; credentials?: { client_email: string; private_key: string } } = {};
+  const options: {
+    projectId?: string;
+    credentials?: { client_email: string; private_key: string };
+  } = {};
   if (projectId) options.projectId = projectId;
 
   if (serviceKey) {
     try {
-      const parsed = JSON.parse(serviceKey) as { client_email?: string; private_key?: string };
+      const parsed = JSON.parse(serviceKey) as {
+        client_email?: string;
+        private_key?: string;
+      };
       if (parsed?.client_email && parsed?.private_key) {
         options.credentials = {
           client_email: parsed.client_email,
-          private_key: parsed.private_key.replace(/\\n/g, '\n'),
+          private_key: parsed.private_key.replace(/\\n/g, "\n"),
         };
       }
     } catch {
       // fallback to ADC if available
       // eslint-disable-next-line no-console
-      console.warn('Failed to parse GCLOUD_SERVICE_KEY, using ADC if available');
+      console.warn(
+        "Failed to parse GCLOUD_SERVICE_KEY, using ADC if available"
+      );
     }
   }
 
@@ -83,13 +96,17 @@ export async function GET(request: Request) {
 
   const dataset = process.env.BQ_DATASET;
   const table = process.env.BQ_TABLE_SO;
-  const sampleTable = process.env.BQ_TABLE_SAMPLE ?? 'Sample_details';
-  const customersTable = process.env.BQ_TABLE_CUSTOMER_COMBINED ?? 'customer_combined';
+  const sampleTable = process.env.BQ_TABLE_SAMPLE ?? "Sample_details";
+  const customersTable =
+    process.env.BQ_TABLE_CUSTOMER_COMBINED ?? "customer_combined";
   const projectId = process.env.BQ_PROJECT;
-  const location = process.env.BQ_LOCATION ?? 'US';
+  const location = process.env.BQ_LOCATION ?? "US";
 
   if (!dataset || !table || !projectId) {
-    return NextResponse.json({ error: 'Missing env: BQ_PROJECT, BQ_DATASET, BQ_TABLE_SO must be set' }, { status: 500 });
+    return NextResponse.json(
+      { error: "Missing env: BQ_PROJECT, BQ_DATASET, BQ_TABLE_SO must be set" },
+      { status: 500 }
+    );
   }
 
   const bq = createBigQueryClient();
@@ -116,15 +133,19 @@ export async function GET(request: Request) {
   }
 
   if (paramsIn.brand) {
-    filters.push('ps.Brand = @brand');
+    filters.push("ps.Brand = @brand");
     params.brand = paramsIn.brand;
   }
   if (paramsIn.city) {
-    filters.push('(LOWER(ps.Parent_CustomerCity) = LOWER(@city) OR LOWER(ps.Child_Customer_City) = LOWER(@city))');
+    filters.push(
+      "(LOWER(ps.Parent_CustomerCity) = LOWER(@city) OR LOWER(ps.Child_Customer_City) = LOWER(@city))"
+    );
     params.city = paramsIn.city;
   }
   if (paramsIn.startDate) {
-    filters.push('ps.so_date_parsed >= SAFE.PARSE_DATE("%Y-%m-%d", @startDate)');
+    filters.push(
+      'ps.so_date_parsed >= SAFE.PARSE_DATE("%Y-%m-%d", @startDate)'
+    );
     params.startDate = paramsIn.startDate;
   }
   if (paramsIn.endDate) {
@@ -133,40 +154,41 @@ export async function GET(request: Request) {
   }
 
   // always apply item length and pending filter (qualified)
-  const itemLengthFilter = 'CHAR_LENGTH(TRIM(ps.Item_Name_Code)) <= 8';
+  const itemLengthFilter = "CHAR_LENGTH(TRIM(ps.Item_Name_Code)) <= 8";
   const pendingFilter = `UPPER(TRIM(ps.Status)) = 'PENDING'`;
 
-  // include logic - validated against allowed columns (we will qualify with ps.)
-  // Added "Customer" mapping -> Parent_CustomerCity so client can request includeColumn=Customer
   const ALLOWED_INCLUDE_COLUMNS: Record<string, string> = {
-    SO_No: 'SO_No',
-    Item_Name_Code: 'Item_Name_Code',
-    Parent_CustomerCity: 'Parent_CustomerCity',
-    Color_Code: 'Color_Code',
-    Broker: 'Broker',
-    Customer: 'Parent_CustomerCity', // accept "Customer" from client and map it to Parent_CustomerCity
+    SO_No: "SO_No",
+    Item_Name_Code: "Item_Name_Code",
+    Parent_CustomerCity: "Parent_CustomerCity",
+    Color_Code: "Color_Code",
+    Broker: "Broker",
+    Customer: "customer_norm", // use normalized field
   };
 
-  let includeConditionSql = '';
-  if (paramsIn.includeColumn && paramsIn.includeValues && paramsIn.includeValues.length > 0) {
+  let includeConditionSql = "";
+  if (
+    paramsIn.includeColumn &&
+    paramsIn.includeValues &&
+    paramsIn.includeValues.length > 0
+  ) {
     const mapped = ALLOWED_INCLUDE_COLUMNS[paramsIn.includeColumn];
     if (mapped) {
-      // qualify mapped column with ps alias and parameterize values
       includeConditionSql = `(ps.${mapped} IN UNNEST(@includeValues))`;
-      // ensure includeValues is an array of strings
-      params.includeValues = paramsIn.includeValues.map((v) => (v ?? '').toString());
+      params.includeValues = paramsIn.includeValues.map((v) =>
+        (v ?? "").toString()
+      );
     } else {
       // ignore invalid includeColumn
-      // eslint-disable-next-line no-console
-      console.warn('Ignored invalid includeColumn:', paramsIn.includeColumn);
+      console.warn("Ignored invalid includeColumn:", paramsIn.includeColumn);
     }
   }
 
-  const baseFiltersSql = filters.length ? filters.join(' AND ') : 'TRUE';
+  const baseFiltersSql = filters.length ? filters.join(" AND ") : "TRUE";
   const leftSide = `(${baseFiltersSql}) AND ${itemLengthFilter} AND ${pendingFilter}`;
 
-  const limitNum = Math.min(500, Number(paramsIn.limit ?? '25'));
-  const offsetNum = Math.max(0, Number(paramsIn.offset ?? '0'));
+  const limitNum = Math.min(500, Number(paramsIn.limit ?? "25"));
+  const offsetNum = Math.max(0, Number(paramsIn.offset ?? "0"));
   params.limit = limitNum;
   params.offset = offsetNum;
 
@@ -243,49 +265,80 @@ export async function GET(request: Request) {
       ON LOWER(TRIM(ps.Item_Name_Code)) = LOWER(TRIM(s.Product_Code))
     LEFT JOIN customers cc
       ON LOWER(TRIM(cc.Company_Name)) = ps.customer_norm
-    ${includeConditionSql ? `WHERE ( ${leftSide} ) OR (${includeConditionSql})` : `WHERE ${leftSide}`}
+    ${ includeConditionSql ? `WHERE ( ${leftSide} ) OR (${includeConditionSql})` : `WHERE ${leftSide}` }
     ORDER BY ps.so_date_parsed ASC NULLS LAST
     LIMIT @limit OFFSET @offset
   `;
 
   const countSql = String.raw`
-    WITH parsed_sales AS (
-      SELECT
-        COALESCE(
-          SAFE_CAST(SO_Date AS DATE),
-          SAFE.PARSE_DATE('%Y-%m-%d', TRIM(SO_Date)),
-          SAFE.PARSE_DATE('%d-%m-%Y', TRIM(SO_Date)),
-          SAFE.PARSE_DATE('%d/%m/%Y', TRIM(SO_Date))
-        ) AS so_date_parsed,
-        Item_Name_Code,
-        Status,
-        SO_No,
-        Color_Code,
-        LOWER(TRIM(REGEXP_REPLACE(COALESCE(Parent_CustomerCity, ''), r'\\s*\\[.*?\\]', ''))) AS customer_norm
-      FROM ${tableRef}
-    )
-    SELECT COUNT(1) as cnt
-    FROM parsed_sales ps
-    LEFT JOIN ${sampleRef} s
-      ON LOWER(TRIM(ps.Item_Name_Code)) = LOWER(TRIM(s.Product_Code))
-    LEFT JOIN ${customersRef} cc
-      ON LOWER(TRIM(cc.Company_Name)) = ps.customer_norm
-    ${includeConditionSql ? `WHERE ( ${leftSide} ) OR (${includeConditionSql})` : `WHERE ${leftSide}`}
-  `;
+  WITH parsed_sales AS (
+    SELECT
+      Parent_CustomerCity,
+      Child_Customer_City,
+      Broker,
+      COALESCE(
+        SAFE_CAST(SO_Date AS DATE),
+        SAFE.PARSE_DATE('%Y-%m-%d', TRIM(SO_Date)),
+        SAFE.PARSE_DATE('%d-%m-%Y', TRIM(SO_Date)),
+        SAFE.PARSE_DATE('%d/%m/%Y', TRIM(SO_Date))
+      ) AS so_date_parsed,
+      Item_Name_Code,
+      Status,
+      SO_No,
+      Color_Code,
+      LOWER(TRIM(REGEXP_REPLACE(COALESCE(Parent_CustomerCity, ''), r'\\s*\\[.*?\\]', ''))) AS customer_norm
+    FROM ${tableRef}
+  )
+  SELECT COUNT(1) as cnt
+  FROM parsed_sales ps
+  LEFT JOIN ${sampleRef} s
+    ON LOWER(TRIM(ps.Item_Name_Code)) = LOWER(TRIM(s.Product_Code))
+  LEFT JOIN ${customersRef} cc
+    ON LOWER(TRIM(cc.Company_Name)) = ps.customer_norm
+  ${ includeConditionSql ? `WHERE ( ${leftSide} ) OR (${includeConditionSql})` : `WHERE ${leftSide}` }
+`;
 
   try {
-    // debug SQL & param keys server-side (safe to log keys only). Remove or guard in production.
-    // console.debug('BigQuery SQL (preview):', sql.split('\n').slice(0, 10).join('\n'));
-    // console.debug('BigQuery params keys:', Object.keys(params));
-
+    // Run the main query
     const [rowsResult] = await bq.query({
       query: sql,
       location,
       params,
     });
 
-    const rows = (rowsResult as unknown) as SalesOrderRow[];
+    // rawRows come straight from BigQuery (Customer may include " [City]" suffix)
+    const rawRows = rowsResult as unknown as SalesOrderRow[];
 
+    /**
+     * Helper: split "NAME [City]" into { name, city }.
+     * If no bracketed city present returns { name: original, city: null }.
+     */
+    function splitCustomerAndCity(input?: string | null): {
+      name: string | null;
+      city: string | null;
+    } {
+      if (!input) return { name: null, city: null };
+      const s = input.toString().trim();
+      const m = s.match(/^(.*?)\s*\[\s*(.*?)\s*\]\s*$/);
+      if (m) {
+        return { name: (m[1] || "").trim() || null, city: (m[2] || "").trim() || null };
+      }
+      return { name: s || null, city: null };
+    }
+
+    // produce cleaned rows: strip bracketed suffix from Customer and optionally expose CustomerCity
+    const cleanedRows: SalesOrderRow[] = rawRows.map((r) => {
+      const { name: custName, city: custCity } = splitCustomerAndCity(r.Customer ?? null);
+      // create shallow copy and override Customer; attach CustomerCity if present
+      const out: SalesOrderRow & { CustomerCity?: string | null } = {
+        ...r,
+        Customer: custName,
+      };
+      if (custCity) out.CustomerCity = custCity;
+      return out;
+    });
+
+    // run count query (unchanged)
     const [countResult] = await bq.query({
       query: countSql,
       location,
@@ -294,14 +347,18 @@ export async function GET(request: Request) {
 
     const total =
       Array.isArray(countResult) && countResult.length > 0
-        ? Number((countResult[0] as { cnt?: string | number }).cnt ?? rows.length)
-        : rows.length;
+        ? Number(
+            (countResult[0] as { cnt?: string | number }).cnt ?? cleanedRows.length
+          )
+        : cleanedRows.length;
 
-    return NextResponse.json({ rows, total });
+    return NextResponse.json({ rows: cleanedRows, total });
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error('BigQuery query error:', error);
+    console.error("BigQuery query error:", error);
     const message = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ error: 'BigQuery query failed: ' + message }, { status: 500 });
+    return NextResponse.json(
+      { error: "BigQuery query failed: " + message },
+      { status: 500 }
+    );
   }
 }
