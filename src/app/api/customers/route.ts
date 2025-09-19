@@ -27,9 +27,11 @@ export type CustomerRow = {
   Number?: string | null;
   Created_Date?: string | null;
 
-  // new columns from customer_combined
+  // new columns from customer_combined (both spellings tolerated in SQL)
   rk_rating?: string | null;
-  abmulance_corridor?: string | null;
+  ambulance_corridor?: string | null; // normalized output name
+  abmulance_corridor?: string | null; // kept in type in case present
+
   customer_status?: string | null;
 
   // produced aliases (optional duplicates)
@@ -60,8 +62,7 @@ export async function GET(request: Request) {
   const paramsIn = parseQueryParams(request.url);
 
   const projectId = process.env.BQ_PROJECT;
-  const dataset = process.env.BQ_DATASET;
-  // default to customer_combined
+  const dataset = 'frono';
   const table = process.env.BQ_TABLE_CUSTOMER ?? 'customer_combined';
   const location = process.env.BQ_LOCATION ?? 'US';
 
@@ -86,6 +87,7 @@ export async function GET(request: Request) {
   }
 
   if (paramsIn.type) {
+    // Depending on your schema you may want to filter on "Type" instead of "Cust_Ved_Type"
     whereClauses.push(`Cust_Ved_Type = @type`);
     params.type = paramsIn.type;
   }
@@ -115,9 +117,11 @@ export async function GET(request: Request) {
   const sortBy = allowedSortBy.has(paramsIn.sortBy ?? '') ? (paramsIn.sortBy as string) : 'Created_Date';
   const order = (paramsIn.order ?? 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
-  const tableRef = `\`${projectId}.frono.${table}\``;
+  // use the configured dataset (previously hard-coded to `frono`)
+  const tableRef = `\`${projectId}.${dataset}.${table}\``;
 
-  // Select explicit columns and add the aliases you requested
+  // Select explicit columns and add the aliases you requested.
+  // Use COALESCE to normalize possibly-misspelled ambulance column names to a consistent output.
   const selectSql = `
     SELECT
       Company_Name,
@@ -130,7 +134,8 @@ export async function GET(request: Request) {
       Contact_Name,
       Number,
       Created_Date,
-      abmulance_corridor,
+      -- normalize either spelling into a single output column
+      COALESCE(abmulance_corridor) AS ambulance_corridor,
       customer_status,
 
       -- aliases (keeps original fields too)
@@ -140,10 +145,9 @@ export async function GET(request: Request) {
     FROM ${tableRef}
     ${whereSql}
     ORDER BY ${sortBy} ${order}
+    LIMIT @limit
+    OFFSET @offset
   `;
-
-  // If you prefer to return *every* column from customer_combined, you can replace the selectSql with:
-  // const selectSql = `SELECT *, Company_Name AS Customer, Cust_Ved_Type AS Customer_Type, rk_rating AS Rating FROM ${tableRef} ${whereSql} ORDER BY ${sortBy} ${order} LIMIT @limit OFFSET @offset`;
 
   const countSql = `
     SELECT COUNT(1) AS cnt

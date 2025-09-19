@@ -1,8 +1,12 @@
-'use client';
+"use client";
 
-import React, { useCallback, useMemo, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import React, { JSX, useCallback, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Command,
   CommandEmpty,
@@ -10,8 +14,8 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from '@/components/ui/command';
-import { cn } from '@/lib/utils';
+} from "@/components/ui/command";
+import { cn } from "@/lib/utils";
 
 type Props = {
   /** Options to show in the list (display strings) */
@@ -32,12 +36,12 @@ export default function SearchMultiSelect({
   options,
   value,
   onChange,
-  placeholder = 'Select...',
-  className = '',
+  placeholder = "Select...",
+  className = "",
   maxChips = 3,
 }: Props): JSX.Element {
   const [open, setOpen] = useState<boolean>(false);
-  const [query, setQuery] = useState<string>('');
+  const [query, setQuery] = useState<string>("");
 
   // filter options by query (case-insensitive)
   const filtered = useMemo(() => {
@@ -65,11 +69,17 @@ export default function SearchMultiSelect({
   }, [onChange]);
 
   // text to show on trigger when nothing selected
-  const triggerText = value.length === 0 ? placeholder : '';
+  const triggerText = value.length === 0 ? placeholder : "";
 
   return (
-    <div className={cn('inline-block', className)}>
-      <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQuery(''); }}>
+    <div className={cn("inline-block", className)}>
+      <Popover
+        open={open}
+        onOpenChange={(o) => {
+          setOpen(o);
+          if (!o) setQuery("");
+        }}
+      >
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
@@ -98,7 +108,9 @@ export default function SearchMultiSelect({
               )}
             </div>
 
-            <div className="text-xs text-slate-400">{value.length === 0 ? 'None' : `${value.length}`}</div>
+            <div className="text-xs text-slate-400">
+              {value.length === 0 ? "None" : `${value.length}`}
+            </div>
           </Button>
         </PopoverTrigger>
 
@@ -144,7 +156,9 @@ export default function SearchMultiSelect({
                         <span className="text-sm">{opt}</span>
                       </div>
 
-                      {checked && <span className="text-xs text-slate-500">Selected</span>}
+                      {checked && (
+                        <span className="text-xs text-slate-500">Selected</span>
+                      )}
                     </CommandItem>
                   );
                 })}

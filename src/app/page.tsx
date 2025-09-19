@@ -9,11 +9,23 @@ import CustomerItemMultiSelect from "@/components/CustomerItemMultiSelect";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
+/**
+ * Page-level types
+ */
 type Filters = {
   q: string;
   tokens: string[];
   brand: string;
   city: string;
+  startDate: string;
+  endDate: string;
+  limit: number;
+  customers: string[];
+  items: string[];
+};
+
+type Draft = {
+  tokens: string[];
   startDate: string;
   endDate: string;
   limit: number;
@@ -28,7 +40,9 @@ const GROUPABLE_OPTIONS = [
   "Broker",
   "Status",
 ] as const;
-type GroupLabel = (typeof GROUPABLE_OPTIONS)[number];
+
+// Local alias for group key values
+type GroupKey = (typeof GROUPABLE_OPTIONS)[number];
 
 type CustomerRow = {
   Customer?: string;
@@ -55,17 +69,20 @@ export default function HomePage(): JSX.Element {
     items: [],
   });
 
-  const [draft, setDraft] = useState({
-    tokens: filters.tokens as string[],
+  const [draft, setDraft] = useState<Draft>({
+    tokens: filters.tokens,
     startDate: filters.startDate,
     endDate: filters.endDate,
     limit: filters.limit,
-    customers: filters.customers as string[],
-    items: filters.items as string[],
+    customers: filters.customers,
+    items: filters.items,
   });
 
-  const [groupBy, setGroupBy] = useState<GroupLabel[]>(["Customer"]);
+  // Use local GroupKey type
+  const [groupBy, setGroupBy] = useState<GroupKey[]>(["Customer" as GroupKey]);
 
+  // We still fetch these for other uses (or to pass later if we extend the component),
+  // but we won't pass them to CustomerItemMultiSelect unless the component accepts them.
   const [customerOptions, setCustomerOptions] = useState<string[]>([]);
   const [itemOptions, setItemOptions] = useState<string[]>([]);
 
@@ -110,7 +127,7 @@ export default function HomePage(): JSX.Element {
       customers: [],
       items: [],
     });
-    setGroupBy(["Customer"]);
+    setGroupBy(["Customer" as GroupKey]);
   }
 
   function onApply() {
@@ -125,18 +142,18 @@ export default function HomePage(): JSX.Element {
     }));
   }
 
+  // Convert selected string[] from GroupMultiSelect into GroupKey[] (safe because options are known)
   function onGroupChange(selected: string[]) {
     if (selected.length === 0) {
-      setGroupBy(["Customer"]);
-    } else {
-      const ordered = GROUPABLE_OPTIONS.filter((opt) =>
-        selected.includes(opt)
-      ) as GroupLabel[];
-      setGroupBy(ordered.length ? ordered : (["Customer"] as GroupLabel[]));
+      setGroupBy(["Customer" as GroupKey]);
+      return;
     }
+    const ordered = GROUPABLE_OPTIONS.filter((opt) =>
+      selected.includes(opt)
+    ) as GroupKey[];
+    setGroupBy(ordered.length ? ordered : (["Customer"] as GroupKey[]));
   }
 
-  // Fetch options
   useEffect(() => {
     let mounted = true;
 
@@ -153,7 +170,6 @@ export default function HomePage(): JSX.Element {
         );
         if (mounted) setCustomerOptions(Array.from(namesSet).sort());
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.warn("Error fetching customers", err);
       }
     }
@@ -171,7 +187,6 @@ export default function HomePage(): JSX.Element {
         );
         if (mounted) setItemOptions(Array.from(namesSet).sort());
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.warn("Error fetching stock", err);
       }
     }
@@ -216,16 +231,16 @@ export default function HomePage(): JSX.Element {
           </div>
 
           <div className="flex items-center gap-3 ml-4">
+            {/* spread readonly tuple into a fresh array to satisfy mutable prop types */}
             <GroupMultiSelect
-              options={GROUPABLE_OPTIONS as unknown as string[]}
-              value={groupBy as unknown as string[]}
+              options={[...GROUPABLE_OPTIONS]}
+              value={[...groupBy]}
               onChange={onGroupChange}
               placeholder="Group by"
               className="min-w-[280px]"
             />
           </div>
 
-          {/* extracted component */}
           <CustomerItemMultiSelect
             selectedCustomers={draft.customers}
             selectedItems={draft.items}
@@ -247,10 +262,7 @@ export default function HomePage(): JSX.Element {
         </div>
       </Card>
 
-      <SalesOrdersTable
-        filters={filters}
-        groupBy={groupBy as unknown as string[]}
-      />
+      <SalesOrdersTable filters={filters} groupBy={groupBy} />
     </main>
   );
 }

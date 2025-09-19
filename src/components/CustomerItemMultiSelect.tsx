@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import React, { useEffect, useState } from 'react';
-import SearchMultiSelect from './SearchMultiSelect';
-import { cn } from '@/lib/utils';
+import React, { JSX, useEffect, useState } from "react";
+import SearchMultiSelect from "./SearchMultiSelect";
+import { cn } from "@/lib/utils";
 
 type Props = {
   selectedCustomers: string[];
@@ -34,12 +34,22 @@ type StockApiResponse = {
   rows: StockRow[];
 };
 
+/** Type-safe guard for AbortError-like errors (no `any`) */
+function isAbortError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as Record<string, unknown>;
+  if ("name" in e && typeof e.name === "string") {
+    return e.name === "AbortError";
+  }
+  return false;
+}
+
 export default function CustomerItemMultiSelect({
   selectedCustomers,
   selectedItems,
   onCustomersChange,
   onItemsChange,
-  className = '',
+  className = "",
   compact = false,
 }: Props): JSX.Element {
   const [customerOptions, setCustomerOptions] = useState<string[]>([]);
@@ -57,22 +67,24 @@ export default function CustomerItemMultiSelect({
       setLoadingCustomers(true);
       setErrorCustomers(null);
       try {
-        const res = await fetch('/api/customers', { signal });
-        if (!res.ok) throw new Error(`customers: ${res.status} ${res.statusText}`);
+        const res = await fetch("/api/customers", { signal });
+        if (!res.ok)
+          throw new Error(`customers: ${res.status} ${res.statusText}`);
         const data = (await res.json()) as CustomersApiResponse;
 
         const names = data.rows
-          .map((r) => (r.Customer ?? r.Company_Name ?? '').trim())
+          .map((r) => (r.Customer ?? r.Company_Name ?? "").trim())
           .filter((v) => v.length > 0);
 
-        const unique = Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+        const unique = Array.from(new Set(names)).sort((a, b) =>
+          a.localeCompare(b)
+        );
         setCustomerOptions(unique);
-      } catch (err) {
-        if ((err as any)?.name === 'AbortError') return;
-        // show friendly message
-        setErrorCustomers('Failed to load customers');
-        // eslint-disable-next-line no-console
-        console.warn('Error fetching customers', err);
+      } catch (err: unknown) {
+        if (isAbortError(err)) return;
+        setErrorCustomers("Failed to load customers");
+        // log for debugging
+        console.warn("Error fetching customers", err);
       } finally {
         setLoadingCustomers(false);
       }
@@ -90,21 +102,23 @@ export default function CustomerItemMultiSelect({
       setLoadingItems(true);
       setErrorItems(null);
       try {
-        const res = await fetch('/api/stock', { signal });
+        const res = await fetch("/api/stock", { signal });
         if (!res.ok) throw new Error(`stock: ${res.status} ${res.statusText}`);
         const data = (await res.json()) as StockApiResponse;
 
         const names = data.rows
-          .map((r) => (r.Item ?? r.normalized_item ?? '').trim())
+          .map((r) => (r.Item ?? r.normalized_item ?? "").trim())
           .filter((v) => v.length > 0);
 
-        const unique = Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+        const unique = Array.from(new Set(names)).sort((a, b) =>
+          a.localeCompare(b)
+        );
         setItemOptions(unique);
-      } catch (err) {
-        if ((err as any)?.name === 'AbortError') return;
-        setErrorItems('Failed to load items');
-        // eslint-disable-next-line no-console
-        console.warn('Error fetching items', err);
+      } catch (err: unknown) {
+        if (isAbortError(err)) return;
+        setErrorItems("Failed to load items");
+        // log for debugging
+        console.warn("Error fetching items", err);
       } finally {
         setLoadingItems(false);
       }
@@ -115,12 +129,16 @@ export default function CustomerItemMultiSelect({
   }, []);
 
   // helper placeholders reflect loading / error states
-  const customerPlaceholder = loadingCustomers ? 'Loading customers…' : errorCustomers ?? 'Customers';
-  const itemPlaceholder = loadingItems ? 'Loading items…' : errorItems ?? 'Items';
+  const customerPlaceholder = loadingCustomers
+    ? "Loading customers…"
+    : errorCustomers ?? "Customers";
+  const itemPlaceholder = loadingItems
+    ? "Loading items…"
+    : errorItems ?? "Items";
 
   return (
-    <div className={cn('flex items-center gap-3', className)}>
-      <div className={compact ? 'min-w-[180px]' : 'min-w-[220px]'}>
+    <div className={cn("flex items-center gap-3", className)}>
+      <div className={compact ? "min-w-[180px]" : "min-w-[220px]"}>
         <SearchMultiSelect
           options={customerOptions}
           value={selectedCustomers}
@@ -129,10 +147,12 @@ export default function CustomerItemMultiSelect({
           className=""
           maxChips={2}
         />
-        {errorCustomers && <div className="text-xs text-red-500 mt-1">{errorCustomers}</div>}
+        {errorCustomers && (
+          <div className="text-xs text-red-500 mt-1">{errorCustomers}</div>
+        )}
       </div>
 
-      <div className={compact ? 'min-w-[180px]' : 'min-w-[220px]'}>
+      <div className={compact ? "min-w-[180px]" : "min-w-[220px]"}>
         <SearchMultiSelect
           options={itemOptions}
           value={selectedItems}
@@ -141,7 +161,9 @@ export default function CustomerItemMultiSelect({
           className=""
           maxChips={2}
         />
-        {errorItems && <div className="text-xs text-red-500 mt-1">{errorItems}</div>}
+        {errorItems && (
+          <div className="text-xs text-red-500 mt-1">{errorItems}</div>
+        )}
       </div>
     </div>
   );
