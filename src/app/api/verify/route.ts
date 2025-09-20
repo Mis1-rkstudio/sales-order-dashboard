@@ -1,6 +1,6 @@
 // app/api/verify/route.ts
+import { createBigQueryClient } from "@/lib/bigquery";
 import { NextResponse } from "next/server";
-import { BigQuery } from "@google-cloud/bigquery";
 
 type TimestampLike =
   | string
@@ -26,38 +26,38 @@ type VerifyRequest = {
   rows: VerifyRowIn[];
 };
 
-function createBigQueryClient(): BigQuery {
-  const projectId = process.env.BQ_PROJECT;
-  const serviceKey = process.env.GCLOUD_SERVICE_KEY;
+// function createBigQueryClient(): BigQuery {
+//   const projectId = process.env.BQ_PROJECT;
+//   const serviceKey = process.env.GCLOUD_SERVICE_KEY;
 
-  const options: {
-    projectId?: string;
-    credentials?: { client_email: string; private_key: string };
-  } = {};
-  if (projectId) options.projectId = projectId;
+//   const options: {
+//     projectId?: string;
+//     credentials?: { client_email: string; private_key: string };
+//   } = {};
+//   if (projectId) options.projectId = projectId;
 
-  if (serviceKey) {
-    try {
-      const parsed = JSON.parse(serviceKey) as {
-        client_email?: string;
-        private_key?: string;
-      };
-      if (parsed?.client_email && parsed?.private_key) {
-        options.credentials = {
-          client_email: parsed.client_email,
-          private_key: parsed.private_key.replace(/\\n/g, "\n"),
-        };
-      }
-    } catch {
-      // fallback to ADC if available
-      console.warn(
-        "Failed to parse GCLOUD_SERVICE_KEY, using ADC if available"
-      );
-    }
-  }
+//   if (serviceKey) {
+//     try {
+//       const parsed = JSON.parse(serviceKey) as {
+//         client_email?: string;
+//         private_key?: string;
+//       };
+//       if (parsed?.client_email && parsed?.private_key) {
+//         options.credentials = {
+//           client_email: parsed.client_email,
+//           private_key: parsed.private_key.replace(/\\n/g, "\n"),
+//         };
+//       }
+//     } catch {
+//       // fallback to ADC if available
+//       console.warn(
+//         "Failed to parse GCLOUD_SERVICE_KEY, using ADC if available"
+//       );
+//     }
+//   }
 
-  return new BigQuery(options);
-}
+//   return new BigQuery(options);
+// }
 
 /**
  * Build a row object that contains only the columns present in your BigQuery table.

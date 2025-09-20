@@ -1,6 +1,6 @@
 // app/api/sample-details/route.ts
 import { NextResponse } from "next/server";
-import { BigQuery } from "@google-cloud/bigquery";
+import { createBigQueryClient } from "@/lib/bigquery";
 
 type QueryParams = {
   q?: string;
@@ -18,45 +18,45 @@ function parseQueryParams(url: string): QueryParams {
   };
 }
 
-function createBigQueryClient(): BigQuery {
-  const projectId = process.env.BQ_PROJECT;
-  const serviceKey = process.env.GCLOUD_SERVICE_KEY;
+// function createBigQueryClient(): BigQuery {
+//   const projectId = process.env.BQ_PROJECT;
+//   const serviceKey = process.env.GCLOUD_SERVICE_KEY;
 
-  const options: {
-    projectId?: string;
-    credentials?: { client_email: string; private_key: string };
-  } = {};
-  if (projectId) options.projectId = projectId;
+//   const options: {
+//     projectId?: string;
+//     credentials?: { client_email: string; private_key: string };
+//   } = {};
+//   if (projectId) options.projectId = projectId;
 
-  if (serviceKey) {
-    try {
-      const parsed = JSON.parse(serviceKey) as {
-        client_email?: string;
-        private_key?: string;
-      };
-      if (parsed?.client_email && parsed?.private_key) {
-        options.credentials = {
-          client_email: parsed.client_email,
-          private_key: parsed.private_key.replace(/\\n/g, "\n"),
-        };
-      }
-    } catch {
-      // fallback to ADC
-      console.warn(
-        "Failed to parse GCLOUD_SERVICE_KEY, using ADC if available"
-      );
-    }
-  }
+//   if (serviceKey) {
+//     try {
+//       const parsed = JSON.parse(serviceKey) as {
+//         client_email?: string;
+//         private_key?: string;
+//       };
+//       if (parsed?.client_email && parsed?.private_key) {
+//         options.credentials = {
+//           client_email: parsed.client_email,
+//           private_key: parsed.private_key.replace(/\\n/g, "\n"),
+//         };
+//       }
+//     } catch {
+//       // fallback to ADC
+//       console.warn(
+//         "Failed to parse GCLOUD_SERVICE_KEY, using ADC if available"
+//       );
+//     }
+//   }
 
-  return new BigQuery(options);
-}
+//   return new BigQuery(options);
+// }
 
 export async function GET(request: Request) {
   const params = parseQueryParams(request.url);
 
   const projectId = process.env.BQ_PROJECT;
   const dataset = "frono";
-  const sampleTable = process.env.BQ_TABLE_SAMPLE ?? "sample_details"; // set in env ideally
+  const sampleTable = process.env.BQ_TABLE_SAMPLE ?? "Sample_details"; // set in env ideally
   const location = process.env.BQ_LOCATION ?? "US";
 
   if (!projectId || !dataset) {

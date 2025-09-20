@@ -1,6 +1,6 @@
 // app/api/customers/route.ts
-import { NextResponse } from 'next/server';
-import { getBigQueryClient } from '@/lib/bigquery';
+import { NextResponse } from "next/server";
+import { createBigQueryClient } from "@/lib/bigquery";
 
 type QueryParamsIn = {
   q?: string;
@@ -47,14 +47,14 @@ function parseQueryParams(url: string): QueryParamsIn {
   const u = new URL(url);
   const s = u.searchParams;
   return {
-    q: s.get('q') ?? undefined,
-    type: s.get('type') ?? undefined,
-    city: s.get('city') ?? undefined,
-    minOutstanding: s.get('minOutstanding') ?? undefined,
-    limit: s.get('limit') ?? undefined,
-    offset: s.get('offset') ?? undefined,
-    sortBy: s.get('sortBy') ?? undefined,
-    order: s.get('order') ?? undefined,
+    q: s.get("q") ?? undefined,
+    type: s.get("type") ?? undefined,
+    city: s.get("city") ?? undefined,
+    minOutstanding: s.get("minOutstanding") ?? undefined,
+    limit: s.get("limit") ?? undefined,
+    offset: s.get("offset") ?? undefined,
+    sortBy: s.get("sortBy") ?? undefined,
+    order: s.get("order") ?? undefined,
   };
 }
 
@@ -62,18 +62,18 @@ export async function GET(request: Request) {
   const paramsIn = parseQueryParams(request.url);
 
   const projectId = process.env.BQ_PROJECT;
-  const dataset = 'frono';
-  const table = process.env.BQ_TABLE_CUSTOMER ?? 'customer_combined';
-  const location = process.env.BQ_LOCATION ?? 'US';
+  const dataset = "frono";
+  const table = process.env.BQ_TABLE_CUSTOMER ?? "customer_combined";
+  const location = process.env.BQ_LOCATION ?? "US";
 
   if (!projectId || !dataset) {
     return NextResponse.json(
-      { error: 'Missing env: BQ_PROJECT and BQ_DATASET must be set' },
+      { error: "Missing env: BQ_PROJECT and BQ_DATASET must be set" },
       { status: 500 }
     );
   }
 
-  const bq = getBigQueryClient();
+  const bq = createBigQueryClient();
 
   // Build parameterized WHERE clauses
   const whereClauses: string[] = [];
@@ -105,17 +105,26 @@ export async function GET(request: Request) {
     }
   }
 
-  const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+  const whereSql = whereClauses.length
+    ? `WHERE ${whereClauses.join(" AND ")}`
+    : "";
 
-  const limitNum = Math.min(1000, Math.max(1, Number(paramsIn.limit ?? '50')));
-  const offsetNum = Math.max(0, Number(paramsIn.offset ?? '0'));
+  const limitNum = Math.min(1000, Math.max(1, Number(paramsIn.limit ?? "50")));
+  const offsetNum = Math.max(0, Number(paramsIn.offset ?? "0"));
   params.limit = limitNum;
   params.offset = offsetNum;
 
   // restrict allowed sort fields for safety
-  const allowedSortBy = new Set(['Created_Date', 'Outstanding', 'Company_Name']);
-  const sortBy = allowedSortBy.has(paramsIn.sortBy ?? '') ? (paramsIn.sortBy as string) : 'Created_Date';
-  const order = (paramsIn.order ?? 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const allowedSortBy = new Set([
+    "Created_Date",
+    "Outstanding",
+    "Company_Name",
+  ]);
+  const sortBy = allowedSortBy.has(paramsIn.sortBy ?? "")
+    ? (paramsIn.sortBy as string)
+    : "Created_Date";
+  const order =
+    (paramsIn.order ?? "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
 
   // use the configured dataset (previously hard-coded to `frono`)
   const tableRef = `\`${projectId}.${dataset}.${table}\``;
@@ -162,7 +171,7 @@ export async function GET(request: Request) {
       params,
     });
 
-    const rows = (rowsResult as unknown) as CustomerRow[];
+    const rows = rowsResult as unknown as CustomerRow[];
 
     const [countResult] = await bq.query({
       query: countSql,
@@ -172,12 +181,14 @@ export async function GET(request: Request) {
 
     const total =
       Array.isArray(countResult) && countResult.length > 0
-        ? Number((countResult[0] as { cnt?: string | number }).cnt ?? rows.length)
+        ? Number(
+            (countResult[0] as { cnt?: string | number }).cnt ?? rows.length
+          )
         : rows.length;
 
     return NextResponse.json({ rows, total });
   } catch (error) {
-    console.error('customers BigQuery error:', error);
+    console.error("customers BigQuery error:", error);
     const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json({ error: message }, { status: 500 });
   }

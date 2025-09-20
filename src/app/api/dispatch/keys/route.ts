@@ -1,6 +1,6 @@
 // app/api/dispatch/keys/route.ts
+import { createBigQueryClient } from "@/lib/bigquery";
 import { NextResponse } from "next/server";
-import { getBigQueryClient } from "@/lib/bigquery";
 
 export async function GET(_: Request) {
   try {
@@ -15,7 +15,7 @@ export async function GET(_: Request) {
       );
     }
 
-    const bq = getBigQueryClient();
+    const bq = createBigQueryClient();
 
     // build composite normalized key: SO_No|Customer|Item|Color (each TRIM()+UPPER()); coalesce nulls to empty string
     const sql = `
