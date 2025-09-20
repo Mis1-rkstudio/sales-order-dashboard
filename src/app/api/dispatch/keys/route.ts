@@ -9,7 +9,10 @@ export async function GET(_: Request) {
     const table = process.env.BQ_TABLE_DISPATCHED ?? "dispatched_orders";
 
     if (!projectId || !dataset) {
-      return NextResponse.json({ error: "Missing BQ_PROJECT or BQ_DATASET" }, { status: 500 });
+      return NextResponse.json(
+        { error: "Missing BQ_PROJECT or BQ_DATASET" },
+        { status: 500 }
+      );
     }
 
     const bq = getBigQueryClient();
@@ -42,7 +45,6 @@ export async function GET(_: Request) {
 
     return NextResponse.json({ keys });
   } catch (err) {
-    // eslint-disable-next-line no-console
     console.error("dispatch keys error", err);
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

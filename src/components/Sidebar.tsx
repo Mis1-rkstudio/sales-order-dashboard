@@ -7,8 +7,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Menu,
   Home,
-  FileText,
-  Grid,
   ChevronsLeft,
   ChevronsRight,
   CheckSquare,

@@ -1,5 +1,5 @@
 // lib/bigquery.ts
-import { BigQuery } from '@google-cloud/bigquery';
+import { BigQuery } from "@google-cloud/bigquery";
 
 /**
  * Use environment variables:
@@ -12,24 +12,31 @@ export function getBigQueryClient(): BigQuery {
   const projectId = process.env.BQ_PROJECT;
   const serviceKey = process.env.GCLOUD_SERVICE_KEY;
 
-  const opts: { projectId?: string; credentials?: { client_email: string; private_key: string } } = {};
+  const opts: {
+    projectId?: string;
+    credentials?: { client_email: string; private_key: string };
+  } = {};
 
   if (projectId) opts.projectId = projectId;
 
   if (serviceKey) {
     try {
-      const parsed = JSON.parse(serviceKey) as { client_email?: string; private_key?: string };
+      const parsed = JSON.parse(serviceKey) as {
+        client_email?: string;
+        private_key?: string;
+      };
       if (parsed?.client_email && parsed?.private_key) {
         opts.credentials = {
           client_email: parsed.client_email,
           // handle literal "\n" sequences
-          private_key: parsed.private_key.replace(/\\n/g, '\n'),
+          private_key: parsed.private_key.replace(/\\n/g, "\n"),
         };
       }
     } catch (err) {
       // parse error -> fall back to ADC. Keep a warning for devs.
-      // eslint-disable-next-line no-console
-      console.warn('getBigQueryClient: failed to parse GCLOUD_SERVICE_KEY; falling back to ADC.');
+      console.warn(
+        "getBigQueryClient: failed to parse GCLOUD_SERVICE_KEY; falling back to ADC."
+      );
     }
   }
 

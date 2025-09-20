@@ -780,12 +780,21 @@ export default function SalesOrdersTable({
         (min, r) => Math.min(min, parseDateToTs(r.so_date_parsed ?? r.SO_Date)),
         Infinity
       );
+      // also sort the flat rows by date (old first) for consistency
+      const flatSorted = [...rows].sort((a, b) => {
+        const ta = parseDateToTs(a.so_date_parsed ?? a.SO_Date);
+        const tb = parseDateToTs(b.so_date_parsed ?? b.SO_Date);
+        if (ta !== tb) return ta - tb;
+        const sa = String(a.SO_No ?? "");
+        const sb = String(b.SO_No ?? "");
+        return sa.localeCompare(sb);
+      });
       return [
         {
           key: "__all__",
           labelParts: ["All"],
-          rows,
-          count: rows.length,
+          rows: flatSorted,
+          count: flatSorted.length,
           sum,
           minTimestamp: minTs,
         },
@@ -830,6 +839,19 @@ export default function SalesOrdersTable({
       }
     }
 
+    // *** NEW: sort rows inside each group by SO date (old first),
+    // tie-break deterministically by SO_No (ascending)
+    for (const grp of map.values()) {
+      grp.rows.sort((a, b) => {
+        const ta = parseDateToTs(a.so_date_parsed ?? a.SO_Date);
+        const tb = parseDateToTs(b.so_date_parsed ?? b.SO_Date);
+        if (ta !== tb) return ta - tb;
+        const sa = String(a.SO_No ?? "");
+        const sb = String(b.SO_No ?? "");
+        return sa.localeCompare(sb);
+      });
+    }
+
     return Array.from(map.values()).sort((a, b) => {
       if (a.minTimestamp !== b.minTimestamp)
         return a.minTimestamp - b.minTimestamp;
@@ -866,6 +888,21 @@ export default function SalesOrdersTable({
     () => Object.values(checked).filter(Boolean).length,
     [checked]
   );
+
+  // map normalized item -> set of SO numbers where it appears
+  const itemToSOs = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const r of rows) {
+      const key = normItemKey(r.Item ?? r.ItemCode ?? null);
+      if (!key) continue;
+      const so = (r.SO_No ?? "").toString().trim();
+      if (!so) continue;
+      const s = m.get(key) ?? new Set<string>();
+      s.add(so);
+      m.set(key, s);
+    }
+    return m;
+  }, [rows]);
 
   const rowKeyFrom = (r: SalesOrderRow) =>
     makeDispatchKey(r.SO_No, r.Customer, r.Item, r.Color).toUpperCase();
@@ -1382,8 +1419,45 @@ export default function SalesOrdersTable({
                                 </td>
 
                                 <td className="py-2 pr-4 align-top">
-                                  <div className="max-w-[140px] truncate">
-                                    {formatCell(r.Item)}
+                                  <div className="max-w-[140px]">
+                                    <div className="truncate">
+                                      {formatCell(r.Item)}
+                                    </div>
+
+                                    {(() => {
+                                      // compute other SOs for this item (exclude current SO)
+                                      const itemKey = normItemKey(
+                                        r.Item ?? r.ItemCode ?? null
+                                      );
+                                      const sosSet = itemToSOs.get(itemKey);
+                                      const allSos = sosSet
+                                        ? Array.from(sosSet)
+                                        : [];
+                                      const currentSo = String(
+                                        r.SO_No ?? ""
+                                      ).trim();
+                                      const otherSos = allSos.filter(
+                                        (s) => s !== currentSo
+                                      );
+                                      const otherCount = otherSos.length;
+                                      if (otherCount === 0) return null;
+
+                                      // short label, tooltip shows actual SO numbers
+                                      const tooltip = otherSos.join(", ");
+
+                                      return (
+                                        <div className="mt-1">
+                                          <span
+                                            title={tooltip}
+                                            className="inline-block text-[11px] px-2 py-[4px] rounded-full bg-slate-100 text-slate-800 border border-slate-200"
+                                          >
+                                            {otherCount === 1
+                                              ? "Also in 1 SO"
+                                              : `Also in ${otherCount} SOs`}
+                                          </span>
+                                        </div>
+                                      );
+                                    })()}
                                   </div>
                                 </td>
 

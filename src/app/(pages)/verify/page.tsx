@@ -14,6 +14,14 @@ type VerifiedRow = {
   Size?: string | null;
   OrderQty?: number | null;
   verified_at?: unknown | null;
+  // optional common created/requested timestamp fields:
+  created_at?: unknown | null;
+  requested_at?: unknown | null;
+  createdAt?: unknown | null;
+  requestedAt?: unknown | null;
+  timestamp?: unknown | null;
+  ts?: unknown | null;
+  time?: unknown | null;
   [key: string]: unknown;
 };
 
@@ -95,6 +103,80 @@ export default function VerifiedPage(): JSX.Element {
 
   useEffect(() => {
     let mounted = true;
+
+    // small helper: try to parse many timestamp shapes into a milliseconds number (or NaN)
+    function parseAnyTimestamp(v: unknown): number {
+      if (v == null) return NaN;
+      if (typeof v === "number") {
+        // assume epoch millis or seconds: disambiguate if seconds-like
+        if (v > 1e12) return v; // already ms
+        if (v > 1e9) return v * 1000; // seconds -> ms
+        return v;
+      }
+      if (typeof v === "string") {
+        const trimmed = v.trim();
+        if (!trimmed) return NaN;
+        const parsed = Date.parse(trimmed);
+        if (!Number.isNaN(parsed)) return parsed;
+        // try parsing dd-mm-yyyy etc not covered by Date.parse:
+        const dmyMatch = trimmed.match(/^(\d{2})[-\/](\d{2})[-\/](\d{4})/);
+        if (dmyMatch) {
+          const isoLike = `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+          const t = Date.parse(isoLike);
+          if (!Number.isNaN(t)) return t;
+        }
+        return NaN;
+      }
+      if (typeof v === "object") {
+        try {
+          const obj = v as Record<string, unknown>;
+          // common protobuf/firestore shape: { seconds: ..., nanos: ... }
+          if (obj["seconds"] !== undefined) {
+            const secs = Number(obj["seconds"]);
+            const nanos = Number(obj["nanos"] ?? 0);
+            if (!Number.isNaN(secs)) {
+              return (
+                secs * 1000 +
+                Math.round((Number.isNaN(nanos) ? 0 : nanos) / 1e6)
+              );
+            }
+          }
+          // nested value: { value: "..." }
+          if (typeof obj["value"] === "string") {
+            const parsed = Date.parse(String(obj["value"]));
+            if (!Number.isNaN(parsed)) return parsed;
+          }
+          // fallback: JSON.stringify maybe contains date string
+          return NaN;
+        } catch {
+          return NaN;
+        }
+      }
+      return NaN;
+    }
+
+    // decides the "added" timestamp for a row by checking several likely fields
+    function addedTimestampForRow(r: VerifiedRow): number {
+      const candidates = [
+        "created_at",
+        "requested_at",
+        "createdAt",
+        "requestedAt",
+        "timestamp",
+        "ts",
+        "time",
+        "verified_at", // fallback (for verified rows)
+      ];
+      for (const key of candidates) {
+        if ((r as Record<string, unknown>)[key] !== undefined) {
+          const t = parseAnyTimestamp((r as Record<string, unknown>)[key]);
+          if (!Number.isNaN(t)) return t;
+        }
+      }
+      // no timestamp found
+      return NaN;
+    }
+
     async function load() {
       setLoading(true);
       try {
@@ -108,7 +190,46 @@ export default function VerifiedPage(): JSX.Element {
         const incoming = Array.isArray(json.rows)
           ? (json.rows as VerifiedRow[])
           : [];
-        if (mounted) setRows(incoming);
+
+        // --- NEW: sort incoming so newly added pending rows appear at top ---
+        const sorted = [...incoming].sort((a, b) => {
+          const aHas = a.verified_at != null;
+          const bHas = b.verified_at != null;
+
+          // pending (no verified_at) should come first
+          if (aHas !== bHas) return aHas ? 1 : -1;
+
+          // both pending: order by added timestamp DESC (newest first)
+          if (!aHas && !bHas) {
+            const taRaw = addedTimestampForRow(a);
+            const tbRaw = addedTimestampForRow(b);
+
+            const ta = Number.isNaN(taRaw) ? Date.now() : taRaw;
+            const tb = Number.isNaN(tbRaw) ? Date.now() : tbRaw;
+
+            // newest first => descending
+            if (ta !== tb) return tb - ta;
+
+            // tiebreaker: SO_No lexicographic
+            const sa = String(a.SO_No ?? "");
+            const sb = String(b.SO_No ?? "");
+            return sa.localeCompare(sb);
+          }
+
+          // both verified: show recently verified first
+          const va = parseAnyTimestamp(a.verified_at);
+          const vb = parseAnyTimestamp(b.verified_at);
+          const aTs = Number.isNaN(va) ? -Infinity : va;
+          const bTs = Number.isNaN(vb) ? -Infinity : vb;
+          if (aTs !== bTs) return bTs - aTs;
+
+          // final tiebreaker: SO_No lexicographic
+          const sa = String(a.SO_No ?? "");
+          const sb = String(b.SO_No ?? "");
+          return sa.localeCompare(sb);
+        });
+
+        if (mounted) setRows(sorted);
       } catch (e) {
         console.error("Error loading verified rows", e);
         if (mounted) setRows([]);

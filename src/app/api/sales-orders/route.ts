@@ -80,7 +80,6 @@ function createBigQueryClient(): BigQuery {
       }
     } catch {
       // fallback to ADC if available
-      // eslint-disable-next-line no-console
       console.warn(
         "Failed to parse GCLOUD_SERVICE_KEY, using ADC if available"
       );
@@ -180,7 +179,6 @@ export async function GET(request: Request) {
       );
     } else {
       // ignore invalid includeColumn
-      // eslint-disable-next-line no-console
       console.warn("Ignored invalid includeColumn:", paramsIn.includeColumn);
     }
   }
@@ -204,8 +202,24 @@ export async function GET(request: Request) {
   params.offset = offsetNum;
 
   const tableRef = `\`${projectId}.${dataset}.${table}\``;
-  const sampleRef = `\`${projectId}.frono.${sampleTable}\``; // use dataset env
-  const customersRef = `\`${projectId}.frono.${customersTable}\``; // use dataset env
+  const sampleRef = `\`${projectId}.frono.${sampleTable}\``;
+  const customersRef = `\`${projectId}.frono.${customersTable}\``;
+
+  const whereClause = includeConditionSql
+    ? `WHERE ( ${leftSide} ) OR (${includeConditionSql})`
+    : `WHERE ${leftSide}`;
+
+  // Rating priority CASE (1 highest). Second layer: FIFO by so_date_parsed (earliest first).
+  // Third deterministic tiebreaker: SO_No ascending.
+  const ratingPriorityCase = `
+    CASE
+      WHEN UPPER(TRIM(COALESCE(Rating, ''))) = 'HIGH' THEN 1
+      WHEN UPPER(TRIM(COALESCE(Rating, ''))) = 'HIGH - CASH' THEN 2
+      WHEN UPPER(TRIM(COALESCE(Rating, ''))) = 'CASH' THEN 3
+      WHEN UPPER(TRIM(COALESCE(Rating, ''))) = 'CASH - NEW CLIENT' THEN 4
+      ELSE 5
+    END
+  `;
 
   const sql = String.raw`
     WITH parsed_sales AS (
@@ -231,62 +245,114 @@ export async function GET(request: Request) {
           SAFE.PARSE_DATE('%d-%m-%Y', TRIM(SO_Date)),
           SAFE.PARSE_DATE('%d/%m/%Y', TRIM(SO_Date))
         ) AS so_date_parsed,
-        -- normalize the raw parent customer field by removing bracketed suffixes
-        LOWER(TRIM(REGEXP_REPLACE(COALESCE(Parent_CustomerCity, ''), r'\\s*\\[.*?\\]', ''))) AS customer_norm
+        LOWER(TRIM(REGEXP_REPLACE(COALESCE(Parent_CustomerCity, ''), r'\s*\[.*?\]', ''))) AS customer_norm
       FROM ${tableRef}
     ),
 
-    sample AS (
+    sample_raw AS (
       SELECT
         Product_Code,
         Concept_2,
         Concept_3,
-        File_URL
+        File_URL,
+        LOWER(TRIM(Product_Code)) AS product_code_norm
       FROM ${sampleRef}
     ),
 
-    customers AS (
+    sample_best AS (
+      SELECT Product_Code, Concept_2, Concept_3, File_URL, product_code_norm
+      FROM (
+        SELECT *,
+          ROW_NUMBER() OVER (PARTITION BY product_code_norm ORDER BY Product_Code) AS rn
+        FROM sample_raw
+      )
+      WHERE rn = 1
+    ),
+
+    customers_raw AS (
       SELECT
         Company_Name,
         Cust_Ved_Type,
         rk_rating,
-        LOWER(TRIM(REGEXP_REPLACE(COALESCE(Company_Name, ''), r'\\s*\\[.*?\\]', ''))) AS company_norm
+        LOWER(TRIM(REGEXP_REPLACE(COALESCE(Company_Name, ''), r'\s*\[.*?\]', ''))) AS company_norm
       FROM ${customersRef}
+    ),
+
+    customers_best AS (
+      SELECT Company_Name, Cust_Ved_Type, rk_rating, company_norm
+      FROM (
+        SELECT *,
+          ROW_NUMBER() OVER (PARTITION BY company_norm ORDER BY Company_Name) AS rn
+        FROM customers_raw
+      )
+      WHERE rn = 1
+    ),
+
+    joined AS (
+      SELECT
+        CASE WHEN ps.so_date_parsed IS NOT NULL THEN FORMAT_DATE('%d-%m-%Y', ps.so_date_parsed) ELSE ps.SO_Date END AS SO_Date,
+        ps.SO_No,
+        ps.Parent_CustomerCity_raw AS Customer,
+        cb.Cust_Ved_Type AS Customer_Type,
+        cb.rk_rating AS Rating,
+        ps.Broker,
+        ps.Item_Name_Code AS Item,
+        ps.Color_Code AS Color,
+        ps.Size,
+        SAFE_CAST(ps.Total AS INT64) AS OrderQty,
+        ps.Expected_Date,
+        ps.Status,
+        s.Concept_2 AS Concept,
+        s.Concept_3 AS Fabric,
+        s.Product_Code AS ItemCode,
+        s.File_URL AS File_URL,
+        CAST(ps.so_date_parsed AS STRING) AS so_date_parsed
+      FROM parsed_sales ps
+      LEFT JOIN sample_best s
+        ON LOWER(TRIM(ps.Item_Name_Code)) = s.product_code_norm
+      LEFT JOIN customers_best cb
+        ON cb.company_norm = ps.customer_norm
+      ${whereClause}
+    ),
+
+    deduped AS (
+      SELECT *,
+        ROW_NUMBER() OVER (
+          PARTITION BY COALESCE(SO_No, ''), LOWER(TRIM(Item)), COALESCE(Color, '')
+          ORDER BY
+            /* 1) rating priority (1 best), 2) FIFO by date (earliest), 3) deterministic SO_No */
+            ${ratingPriorityCase} ASC,
+            SAFE_CAST(so_date_parsed AS DATE) ASC NULLS LAST,
+            COALESCE(SO_No, '') ASC
+        ) AS rn
+      FROM joined
     )
 
     SELECT
-      CASE WHEN ps.so_date_parsed IS NOT NULL THEN FORMAT_DATE('%d-%m-%Y', ps.so_date_parsed) ELSE ps.SO_Date END AS SO_Date,
-      ps.SO_No,
-      ps.Parent_CustomerCity_raw AS Customer,
-      cc.Cust_Ved_Type AS Customer_Type,
-      cc.rk_rating AS Rating,
-      ps.Broker,
-      ps.Item_Name_Code AS Item,
-      ps.Color_Code AS Color,
-      ps.Size,
-      SAFE_CAST(ps.Total AS INT64) AS OrderQty,
-      ps.Expected_Date,
-      ps.Status,
-      s.Concept_2 AS Concept,
-      s.Concept_3 AS Fabric,
-      s.Product_Code AS ItemCode,
-      s.File_URL AS File_URL,
-      CAST(ps.so_date_parsed AS STRING) as so_date_parsed
-
-    FROM parsed_sales ps
-    LEFT JOIN sample s
-      ON LOWER(TRIM(ps.Item_Name_Code)) = LOWER(TRIM(s.Product_Code))
-    LEFT JOIN customers cc
-      -- join first on normalized forms, fallback to direct trimmed name comparison
-      ON cc.company_norm = ps.customer_norm
-      OR LOWER(TRIM(cc.Company_Name)) = LOWER(TRIM(ps.Parent_CustomerCity_raw))
-    ${
-      includeConditionSql
-        ? `WHERE ( ${leftSide} ) OR (${includeConditionSql})`
-        : `WHERE ${leftSide}`
-    }
-    ORDER BY ps.so_date_parsed ASC NULLS LAST
-    LIMIT @limit OFFSET @offset
+      SO_Date,
+      SO_No,
+      Customer,
+      Customer_Type,
+      Rating,
+      Broker,
+      Item,
+      Color,
+      Size,
+      OrderQty,
+      Expected_Date,
+      Status,
+      Concept,
+      Fabric,
+      ItemCode,
+      File_URL,
+      so_date_parsed
+    FROM deduped
+    WHERE rn = 1
+    ORDER BY
+      ${ratingPriorityCase} ASC,
+      SAFE_CAST(so_date_parsed AS DATE) ASC NULLS LAST,
+      COALESCE(SO_No, '') ASC
+    LIMIT @limit OFFSET @offset;
   `;
 
   const countSql = String.raw`
@@ -308,32 +374,53 @@ export async function GET(request: Request) {
           SAFE.PARSE_DATE('%d-%m-%Y', TRIM(SO_Date)),
           SAFE.PARSE_DATE('%d/%m/%Y', TRIM(SO_Date))
         ) AS so_date_parsed,
-        LOWER(TRIM(REGEXP_REPLACE(COALESCE(Parent_CustomerCity, ''), r'\\s*\\[.*?\\]', ''))) AS customer_norm
+        LOWER(TRIM(REGEXP_REPLACE(COALESCE(Parent_CustomerCity, ''), r'\s*\[.*?\]', ''))) AS customer_norm
       FROM ${tableRef}
     ),
 
-    sample AS (
-      SELECT Product_Code FROM ${sampleRef}
+    sample_raw AS (
+      SELECT LOWER(TRIM(Product_Code)) AS product_code_norm
+      FROM ${sampleRef}
     ),
 
-    customers AS (
-      SELECT LOWER(TRIM(REGEXP_REPLACE(COALESCE(Company_Name, ''), r'\\s*\\[.*?\\]', ''))) AS company_norm,
-             Company_Name
+    sample_best AS (
+      SELECT product_code_norm
+      FROM (
+        SELECT product_code_norm,
+          ROW_NUMBER() OVER (PARTITION BY product_code_norm ORDER BY product_code_norm) AS rn
+        FROM sample_raw
+      )
+      WHERE rn = 1
+    ),
+
+    customers_raw AS (
+      SELECT
+        LOWER(TRIM(REGEXP_REPLACE(COALESCE(Company_Name, ''), r'\s*\[.*?\]', ''))) AS company_norm
       FROM ${customersRef}
+    ),
+
+    customers_best AS (
+      SELECT company_norm
+      FROM (
+        SELECT company_norm,
+          ROW_NUMBER() OVER (PARTITION BY company_norm ORDER BY company_norm) AS rn
+        FROM customers_raw
+      )
+      WHERE rn = 1
     )
 
-    SELECT COUNT(1) AS cnt
+    SELECT
+      COUNT(DISTINCT CONCAT(
+        COALESCE(ps.SO_No, ''), '|',
+        LOWER(TRIM(ps.Item_Name_Code)), '|',
+        COALESCE(ps.Color_Code, '')
+      )) AS cnt
     FROM parsed_sales ps
-    LEFT JOIN sample s
-      ON LOWER(TRIM(ps.Item_Name_Code)) = LOWER(TRIM(s.Product_Code))
-    LEFT JOIN customers cc
-      ON cc.company_norm = ps.customer_norm
-      OR LOWER(TRIM(cc.Company_Name)) = LOWER(TRIM(ps.Parent_CustomerCity_raw))
-    ${
-      includeConditionSql
-        ? `WHERE ( ${leftSide} ) OR (${includeConditionSql})`
-        : `WHERE ${leftSide}`
-    }
+    LEFT JOIN sample_best s
+      ON LOWER(TRIM(ps.Item_Name_Code)) = s.product_code_norm
+    LEFT JOIN customers_best cb
+      ON cb.company_norm = ps.customer_norm
+    ${whereClause};
   `;
 
   try {
@@ -390,7 +477,6 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ rows: cleanedRows, total });
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error("BigQuery query error:", error);
     const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
