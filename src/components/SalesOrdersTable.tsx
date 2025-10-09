@@ -1,4 +1,3 @@
-// components/SalesOrdersTable.tsx
 "use client";
 
 import React, { JSX, useCallback, useEffect, useMemo, useState } from "react";
@@ -138,6 +137,22 @@ function verifyHasTimestamp(v: unknown): boolean {
   return true;
 }
 
+/* ---------- normalize helpers used for invoice match ---------- */
+
+function normalizeCustomerForCompare(s?: string | null): string {
+  return (s ?? "")
+    .toString()
+    .replace(/\s*\[.*?\]/g, "")
+    .trim()
+    .toLowerCase();
+}
+function normalizeItemForCompare(s?: string | null): string {
+  return (s ?? "").toString().trim().toLowerCase();
+}
+function normalizeColorForCompare(s?: string | null): string {
+  return (s ?? "").toString().trim().toLowerCase();
+}
+
 /* ---------- component ---------- */
 
 export default function SalesOrdersTable({
@@ -163,6 +178,11 @@ export default function SalesOrdersTable({
   const [pendingMap, setPendingMap] = useState<Record<string, SalesOrderRow>>(
     {}
   );
+
+  // invoice lookup: normalized key -> latest parsed_date (ISO) and daysAgo
+  const [invoiceMap, setInvoiceMap] = useState<
+    Record<string, { dateIso: string; daysAgo: number }>
+  >({});
 
   // selection state for replacement color per composite key
   const [selectedColors, setSelectedColors] = useState<Record<string, string>>(
@@ -584,6 +604,144 @@ export default function SalesOrdersTable({
           });
         }
 
+        // --- NEW: fetch invoice-details earlier so we can filter rows by SO_Date vs invoice date ---
+        let finalInvMap: Record<string, { dateIso: string; daysAgo: number }> =
+          {};
+        try {
+          const invRes = await fetch("/api/invoice-details?limit=1000", {
+            signal: abortCtrl.signal,
+          });
+          if (invRes.ok) {
+            const invJson = (await invRes.json()) as {
+              rows?: Array<Record<string, unknown>>;
+            } | null;
+            const invRows = invJson?.rows ?? [];
+
+            const invMapRaw: Record<string, string> = {};
+            for (const inv of invRows) {
+              const custName = (
+                inv["Customer_Name"] ??
+                inv["Customer"] ??
+                ""
+              ).toString();
+              const itemCode = (
+                inv["Item_Code"] ??
+                inv["Item"] ??
+                ""
+              ).toString();
+              const color = (
+                inv["Item_Color"] ??
+                inv["Color"] ??
+                ""
+              ).toString();
+
+              const cNorm = normalizeCustomerForCompare(custName);
+              const iNorm = normalizeItemForCompare(itemCode);
+              const colNorm = normalizeColorForCompare(color);
+              if (!cNorm || !iNorm) continue;
+
+              const dateStrCandidate =
+                (inv["parsed_date"] as string | undefined) ??
+                (inv["parsed_date_iso"] as string | undefined) ??
+                (inv["Date"] as string | undefined) ??
+                (inv["date"] as string | undefined);
+
+              if (!dateStrCandidate) continue;
+
+              // parse to ISO yyyy-mm-dd
+              const tryParseIso = (ds: string): string | null => {
+                const p = Date.parse(ds);
+                if (!Number.isNaN(p)) {
+                  return new Date(p).toISOString().slice(0, 10);
+                }
+                const m = ds.match(/^(\d{2})[-\/](\d{2})[-\/](\d{4})$/);
+                if (m) {
+                  const isoLike = `${m[3]}-${m[2]}-${m[1]}`;
+                  const p2 = Date.parse(isoLike);
+                  if (!Number.isNaN(p2))
+                    return new Date(p2).toISOString().slice(0, 10);
+                }
+                const loose = Date.parse(ds.replace(/\./g, "-"));
+                if (!Number.isNaN(loose))
+                  return new Date(loose).toISOString().slice(0, 10);
+                return null;
+              };
+
+              const iso = tryParseIso(dateStrCandidate);
+              if (!iso) continue;
+              const key = `${cNorm}|${iNorm}|${colNorm}`;
+              const prev = invMapRaw[key];
+              if (!prev || iso > prev) invMapRaw[key] = iso;
+            }
+
+            // convert to finalInvMap with daysAgo
+            const now = Date.now();
+            for (const [k, iso] of Object.entries(invMapRaw)) {
+              const t = Date.parse(iso);
+              if (Number.isNaN(t)) continue;
+              const daysAgo = Math.floor((now - t) / (1000 * 60 * 60 * 24));
+              finalInvMap[k] = { dateIso: iso, daysAgo };
+            }
+          } else {
+            finalInvMap = {};
+          }
+        } catch (err) {
+          if (!(err instanceof DOMException && err.name === "AbortError")) {
+            console.warn("invoice-details fetch failed", err);
+          }
+          finalInvMap = {};
+        }
+
+        // filter rowsWithUid using invoice logic:
+        // if soDate < invoiceDate => HIDE the SO row
+        // if soDate >= invoiceDate => KEEP (pill will be shown via invoiceMap)
+        const tryParseToIso = (ds?: string | null): string | null => {
+          if (!ds) return null;
+          const s = String(ds).trim();
+          if (!s) return null;
+          const p = Date.parse(s);
+          if (!Number.isNaN(p)) return new Date(p).toISOString().slice(0, 10);
+          const m = s.match(/^(\d{2})[-\/](\d{2})[-\/](\d{4})$/);
+          if (m) {
+            const isoLike = `${m[3]}-${m[2]}-${m[1]}`;
+            const p2 = Date.parse(isoLike);
+            if (!Number.isNaN(p2))
+              return new Date(p2).toISOString().slice(0, 10);
+          }
+          const loose = Date.parse(s.replace(/\./g, "-"));
+          if (!Number.isNaN(loose))
+            return new Date(loose).toISOString().slice(0, 10);
+          return null;
+        };
+
+        const beforeFilterCount = rowsWithUid.length;
+        rowsWithUid = rowsWithUid.filter((r) => {
+          const cust = r.Customer ?? "";
+          const item = r.Item ?? r.ItemCode ?? "";
+          const color = r.Color ?? "";
+          const invKey = `${normalizeCustomerForCompare(
+            cust
+          )}|${normalizeItemForCompare(item)}|${normalizeColorForCompare(
+            color
+          )}`;
+          const invRec = finalInvMap[invKey];
+          if (!invRec) {
+            // no invoice match -> keep row
+            return true;
+          }
+          const soIso = tryParseToIso(r.SO_Date ?? r.so_date_parsed ?? "");
+          if (!soIso) {
+            // cannot parse SO date -> keep row
+            return true;
+          }
+          // keep row only if SO_Date >= invoiceDate
+          return soIso >= invRec.dateIso;
+        });
+
+        // set invoice state (so UI shows pill)
+        setInvoiceMap(finalInvMap);
+
+        // --- continue: compute keys for stock based on filtered rowsWithUid ---
         const keys = Array.from(
           new Set(
             rowsWithUid
@@ -653,6 +811,7 @@ export default function SalesOrdersTable({
           }
         }
 
+        // --- sorting & extra filtering (unchanged) ---
         rowsWithUid.sort((a, b) => {
           const aQty = Number(a.OrderQty ?? 0);
           const bQty = Number(b.OrderQty ?? 0);
@@ -684,28 +843,30 @@ export default function SalesOrdersTable({
           return true;
         });
 
-        const normalizeCustomerForCompare = (s?: string | null) =>
+        const normalizeCustomerForCompareLocal = (s?: string | null) =>
           (s ?? "")
             .toString()
             .replace(/\s*\[.*?\]/g, "")
             .trim()
             .toLowerCase();
-        const normalizeItemForCompare = (s?: string | null) =>
+        const normalizeItemForCompareLocal = (s?: string | null) =>
           (s ?? "").toString().trim().toLowerCase();
 
         const selectedCustomersSet = new Set(
-          (filters.customers ?? []).map((c) => normalizeCustomerForCompare(c))
+          (filters.customers ?? []).map((c) =>
+            normalizeCustomerForCompareLocal(c)
+          )
         );
         const selectedItemsSet = new Set(
-          (filters.items ?? []).map((i) => normalizeItemForCompare(i))
+          (filters.items ?? []).map((i) => normalizeItemForCompareLocal(i))
         );
 
         const shouldFilterByCustomers = selectedCustomersSet.size > 0;
         const shouldFilterByItems = selectedItemsSet.size > 0;
 
         const finalRows = filteredRows.filter((r) => {
-          const customerNorm = normalizeCustomerForCompare(r.Customer);
-          const itemNorm = normalizeItemForCompare(r.Item);
+          const customerNorm = normalizeCustomerForCompareLocal(r.Customer);
+          const itemNorm = normalizeItemForCompareLocal(r.Item);
 
           if (
             shouldFilterByCustomers &&
@@ -717,13 +878,10 @@ export default function SalesOrdersTable({
           return true;
         });
 
-        const removedCount = Math.max(0, incoming.length - filteredRows.length);
-        const extraRemovedCount = Math.max(
-          0,
-          filteredRows.length - finalRows.length
-        );
+        // compute totals accounting for removed rows
+        const removedCount = Math.max(0, incoming.length - finalRows.length);
         const computedTotal = Number.isFinite(serverTotal)
-          ? Math.max(0, serverTotal - removedCount - extraRemovedCount)
+          ? Math.max(0, serverTotal - removedCount)
           : finalRows.length;
 
         setRows(finalRows);
@@ -1166,11 +1324,11 @@ export default function SalesOrdersTable({
 
   return (
     // CENTERED NARROW PAGE: tweak max-w-[1200px] to taste (e.g. max-w-5xl, max-w-[1000px], etc.)
-    <div className="max-w-[1350px] mx-auto px-4 text-xs">
+    <div className="max-w-[1350px] mx-auto text-xs border rounded-xl">
       <Card className="p-0 overflow-visible">
         {/* Sticky top toolbar */}
-        <div className="sticky top-0 z-40">
-          <div className="flex justify-between items-center p-3 border-b bg-white dark:bg-slate-900/95 backdrop-blur-sm">
+        <div className="sticky top-0 z-40 border rounded-xl">
+          <div className="flex justify-between items-center p-3 border-b bg-white dark:bg-slate-900/95 backdrop-blur-sm rounded-xl">
             <div className="flex items-center gap-3">
               <div>
                 <strong>Showing</strong> {rows.length} / {total}
@@ -1330,6 +1488,14 @@ export default function SalesOrdersTable({
                               r.New_Color ??
                               null;
 
+                            // invoice-pill: find invoice match by normalized (customer|item|color)
+                            const invoiceKey = `${normalizeCustomerForCompare(
+                              r.Customer
+                            )}|${normalizeItemForCompare(
+                              r.Item ?? r.ItemCode ?? ""
+                            )}|${normalizeColorForCompare(r.Color)}`;
+                            const invoiceMatch = invoiceMap[invoiceKey];
+
                             return (
                               <tr
                                 key={`${g.key}-${rowUid}-${idx}`}
@@ -1360,6 +1526,21 @@ export default function SalesOrdersTable({
                                     <div className="truncate">
                                       {formatCell(r.Customer)}
                                     </div>
+
+                                    {invoiceMatch ? (
+                                      <div className="mt-1">
+                                        <span
+                                          title={`Last dispatched on ${invoiceMatch.dateIso}`}
+                                          className="inline-block text-[11px] px-2 py-[4px] rounded-full bg-slate-100 text-slate-800 border border-slate-200"
+                                        >
+                                          {invoiceMatch.daysAgo <= 0
+                                            ? "Dispatched today"
+                                            : invoiceMatch.daysAgo === 1
+                                            ? "Dispatched 1d ago"
+                                            : `Dispatched ${invoiceMatch.daysAgo}d ago`}
+                                        </span>
+                                      </div>
+                                    ) : null}
                                   </div>
                                 </td>
 

@@ -18,8 +18,8 @@ export type InvoiceRow = {
   Date?: string | null;
   parsed_date?: string | null;
   Total?: number | null;
-  Item_Code?: string | null;
-  Item_Color?: string | null;
+  Item?: string | null;
+  Color?: string | null;
   [key: string]: string | number | null | undefined;
 };
 
@@ -39,7 +39,6 @@ export async function GET(request: Request) {
   const paramsIn = parseQueryParams(request.url);
 
   const dataset = process.env.BQ_DATASET;
-  // read table name from env; fallback to the previous default
   const table =
     process.env.BQ_TABLE_INVOICE_DETAILS ?? "kolkata_item_wise_customer";
   const projectId = process.env.BQ_PROJECT;
@@ -89,6 +88,9 @@ export async function GET(request: Request) {
     params.endDate = paramsIn.endDate;
   }
 
+  // Exclude rows where Item length > 8 (Item is source column Item_Code).
+  filters.push(`CHAR_LENGTH(COALESCE(t.Item_Code, '')) <= 8`);
+
   const parsedLimit = Number(paramsIn.limit ?? "100");
   const limitNum =
     Number.isFinite(parsedLimit) && parsedLimit > 0
@@ -122,10 +124,27 @@ export async function GET(request: Request) {
           SAFE.PARSE_DATE('%d/%m/%Y', TRIM(Date))
         ) AS parsed_date,
         Total,
-        Item_Code,
-        Item_Color
+        Item_Code AS Item,
+        Item_Color AS Color
       FROM ${tableRef} AS t
       ${whereClause}
+    ),
+    dedup AS (
+      SELECT
+        Customer_Name,
+        Area,
+        Broker_Name,
+        Order_No,
+        Date,
+        parsed_date,
+        Total,
+        Item,
+        Color,
+        ROW_NUMBER() OVER (
+          PARTITION BY Customer_Name, Item
+          ORDER BY parsed_date DESC NULLS LAST, Order_No DESC
+        ) AS rn
+      FROM parsed
     )
     SELECT
       Customer_Name,
@@ -135,16 +154,19 @@ export async function GET(request: Request) {
       Date,
       FORMAT_DATE('%Y-%m-%d', parsed_date) AS parsed_date,
       Total,
-      Item_Code,
-      Item_Color
-    FROM parsed
-    ORDER BY parsed_date ASC NULLS LAST, Order_No ASC
+      Item,
+      Color
+    FROM dedup
+    WHERE rn = 1
+    ORDER BY parsed_date DESC NULLS LAST, Customer_Name ASC
     LIMIT @limit OFFSET @offset
   `;
 
   const countSql = String.raw`
     WITH parsed AS (
       SELECT
+        Customer_Name,
+        Item_Code AS Item,
         COALESCE(
           SAFE_CAST(Date AS DATE),
           SAFE.PARSE_DATE('%Y-%m-%d', TRIM(Date)),
@@ -154,7 +176,12 @@ export async function GET(request: Request) {
       FROM ${tableRef} AS t
       ${whereClause}
     )
-    SELECT COUNT(1) AS cnt FROM parsed
+    -- Count distinct Customer_Name + Item groups that match filters
+    SELECT COUNT(1) AS cnt FROM (
+      SELECT Customer_Name, Item
+      FROM parsed
+      GROUP BY Customer_Name, Item
+    ) AS unique_groups
   `;
 
   try {
@@ -180,8 +207,8 @@ export async function GET(request: Request) {
             : typeof rec.Total === "number"
             ? rec.Total
             : Number(rec.Total) || null,
-        Item_Code: rec.Item_Code == null ? null : String(rec.Item_Code),
-        Item_Color: rec.Item_Color == null ? null : String(rec.Item_Color),
+        Item: rec.Item == null ? null : String(rec.Item),
+        Color: rec.Color == null ? null : String(rec.Color),
       } as InvoiceRow;
     });
 

@@ -30,7 +30,7 @@ export type CustomerRow = {
   // new columns from customer_combined (both spellings tolerated in SQL)
   rk_rating?: string | null;
   ambulance_corridor?: string | null; // normalized output name
-  abmulance_corridor?: string | null; // kept in type in case present
+  // abmulance_corridor?: string | null; // kept in type in case present
 
   customer_status?: string | null;
 
@@ -144,7 +144,7 @@ export async function GET(request: Request) {
       Number,
       Created_Date,
       -- normalize either spelling into a single output column
-      COALESCE(abmulance_corridor) AS ambulance_corridor,
+      ambulance_corridor,
       customer_status,
 
       -- aliases (keeps original fields too)
