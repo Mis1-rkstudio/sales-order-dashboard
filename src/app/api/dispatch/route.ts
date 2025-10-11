@@ -1,12 +1,14 @@
 // app/api/dispatch/route.ts
 import { NextResponse } from "next/server";
-import { createBigQueryClient } from "@/lib/bigquery";
+import { createBigQueryClient, insertRowsWithEnsure } from "@/lib/bigquery";
 
 export type DispatchRow = {
   SO_No: string;
   Customer?: string | null;
   Item?: string | null;
   Color?: string | null;
+  // optional quantity produced associated with this dispatch
+  ProductionQty?: number | null;
   Dispatched: boolean;
   Dispatched_At?: string | null;
 };
@@ -78,11 +80,23 @@ export async function POST(request: Request) {
             ? obj.SO_No.trim()
             : undefined;
         if (!so) return null;
+        // parse ProductionQty if present (allow number or numeric string)
+        let prodQty: number | null = null;
+        if (typeof obj.ProductionQty === "number") {
+          prodQty = Number.isFinite(obj.ProductionQty)
+            ? (obj.ProductionQty as number)
+            : null;
+        } else if (typeof obj.ProductionQty === "string") {
+          const n = Number(obj.ProductionQty);
+          prodQty = Number.isNaN(n) ? null : n;
+        }
+
         return {
           SO_No: so,
           Customer: typeof obj.Customer === "string" ? obj.Customer : null,
           Item: typeof obj.Item === "string" ? obj.Item : null,
           Color: typeof obj.Color === "string" ? obj.Color : null,
+          ProductionQty: prodQty,
           Dispatched: Boolean(obj.Dispatched),
           Dispatched_At: new Date().toISOString(),
         } as DispatchRow;
@@ -121,19 +135,13 @@ export async function POST(request: Request) {
     );
 
     try {
-      // Typical google-cloud/bigquery style insert - adjust if your client is different.
-      // Options: ignoreUnknownValues/skipInvalidRows may help if BigQuery complains about extra fields
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore-next-line - allow different client shapes
-      const insertResult = await bq
-        .dataset(dataset)
-        .table(table)
-        .insert(rowsToInsert, {
-          ignoreUnknownValues: true,
-          skipInvalidRows: false,
-        });
-
-      // some clients return a result object; log it
+      // use helper which ensures dataset/table exist before insert
+      const insertResult = await insertRowsWithEnsure(
+        bq,
+        dataset,
+        table,
+        rowsToInsert as Array<Record<string, unknown>>
+      );
       console.debug("BigQuery insert result:", insertResult);
 
       return NextResponse.json({
@@ -141,9 +149,8 @@ export async function POST(request: Request) {
         table: tableRef,
       });
     } catch (insertError) {
-      // parse and return useful message
       const details = extractErrorDetails(insertError);
-      console.error("BigQuery insert error:", details, insertError);
+      console.error("BigQuery insert (ensure) error:", details, insertError);
       return NextResponse.json(
         { error: "BigQuery insert error", details },
         { status: 500 }

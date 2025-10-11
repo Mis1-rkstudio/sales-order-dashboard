@@ -4,58 +4,23 @@ import React, { JSX, useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+// badge imported previously but table uses inline spans for status
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import FileThumbnail from "@/components/FileThumbnail";
 import PaginationControls from "@/components/PaginationControls";
-
-/* ---------- types ---------- */
-
-export type SalesOrderRow = {
-  SO_Date?: string | null;
-  SO_No?: string | null;
-  Customer?: string | null;
-  Customer_Type?: string | null;
-  Rating?: string | null;
-  Broker?: string | null;
-  Item?: string | null;
-  ItemCode?: string | null;
-  Color?: string | null;
-  New_Color?: string | null; // <-- replacement color (if any)
-  Size?: string | null | number;
-  OrderQty?: number | null;
-  Expected_Date?: string | null;
-  Status?: string | null;
-  so_date_parsed?: string | null;
-  Concept?: string | null;
-  Fabric?: string | null;
-  File_URL?: string | URL | null;
-
-  Stock?: number | null;
-  StockByColor?: Record<string, number> | null;
-
-  __uid?: string;
-  __pending?: boolean;
-};
-
-export type Filters = {
-  q: string;
-  tokens: string[];
-  brand: string;
-  city: string;
-  startDate: string;
-  endDate: string;
-  limit: number;
-  customers?: string[];
-  items?: string[];
-};
-
-type GroupKey = "Customer" | "Item" | "Color" | "Broker" | "Status";
-const ALL_GROUP_KEYS: GroupKey[] = [
-  "Customer",
-  "Item",
-  "Color",
-  "Broker",
-  "Status",
-];
+import { CancelOrderDialog } from "@/components/CancelOrderDialog";
+import StockCell from "./StockCell";
+import RowActions from "./RowActions";
+import { useSalesOrders } from "@/hooks/useSalesOrders";
+import type { SalesOrderRow, Filters, GroupKey } from "@/types/sales";
+import { ALL_GROUP_KEYS } from "@/types/sales";
 
 /* ---------- helpers ---------- */
 
@@ -162,10 +127,19 @@ export default function SalesOrdersTable({
   filters: Filters;
   groupBy?: GroupKey[];
 }): JSX.Element {
-  const [rows, setRows] = useState<SalesOrderRow[]>([]);
-  const [page, setPage] = useState<number>(0);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [total, setTotal] = useState<number>(0);
+  const {
+    rows,
+    setRows,
+    page,
+    setPage,
+    loading,
+    total,
+    refreshKey,
+    invoiceMap,
+    setInvoiceMap,
+    setLoading,
+    setTotal,
+  } = useSalesOrders(filters, groupBy);
   const [collapsedGroups, setCollapsedGroups] = useState<
     Record<string, boolean>
   >({});
@@ -173,23 +147,53 @@ export default function SalesOrdersTable({
   const [saving, setSaving] = useState<boolean>(false);
   const [verifying, setVerifying] = useState<boolean>(false);
 
-  const [dispatchedSet, setDispatchedSet] = useState<Set<string>>(new Set());
-  const [pendingSet, setPendingSet] = useState<Set<string>>(new Set());
+  const [, setDispatchedSet] = useState<Set<string>>(new Set());
+  const [, setPendingSet] = useState<Set<string>>(new Set());
   const [pendingMap, setPendingMap] = useState<Record<string, SalesOrderRow>>(
     {}
   );
 
   // invoice lookup: normalized key -> latest parsed_date (ISO) and daysAgo
-  const [invoiceMap, setInvoiceMap] = useState<
-    Record<string, { dateIso: string; daysAgo: number }>
-  >({});
-
   // selection state for replacement color per composite key
   const [selectedColors, setSelectedColors] = useState<Record<string, string>>(
     {}
   );
+  // per-row production quantity keyed by row __uid
+  const [productionQtyByUid, setProductionQtyByUid] = useState<
+    Record<string, number | null>
+  >({});
+  const [cancelDialogOrder, setCancelDialogOrder] =
+    useState<SalesOrderRow | null>(null);
 
-  const [refreshKey, setRefreshKey] = useState<number>(0);
+  // Function to handle order cancellation
+  const handleCancelOrder = async (order: SalesOrderRow) => {
+    if (!order.SO_No) return;
+
+    try {
+      const response = await fetch("/api/sales-orders/cancel", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ orderNo: order.SO_No }),
+      });
+
+      if (!response.ok) throw new Error("Failed to cancel order");
+
+      // Update local state
+      setRows((currentRows) =>
+        currentRows.map((row) =>
+          row.SO_No === order.SO_No ? { ...row, Status: "Cancelled" } : row
+        )
+      );
+
+      // Close dialog
+      setCancelDialogOrder(null);
+    } catch (error) {
+      console.error("Error cancelling order:", error);
+      // You might want to show an error message to the user here
+    }
+  };
 
   useEffect(() => {
     let channel: BroadcastChannel | null = null;
@@ -404,20 +408,28 @@ export default function SalesOrdersTable({
           );
       } catch {}
     };
-  }, []);
+    // include stable setters used inside effect
+  }, [setRows, setSelectedColors, setPendingSet, setPendingMap]);
+
+  // stable JSON keys for complex deps used by effects
+  const tokensKey = JSON.stringify(filters.tokens);
+  const customersKey = JSON.stringify(filters.customers ?? []);
+  const itemsKey = JSON.stringify(filters.items ?? []);
+  const groupByKey = JSON.stringify(groupBy ?? []);
 
   useEffect(() => {
     setPage(0);
   }, [
     filters.q,
-    JSON.stringify(filters.tokens),
+    tokensKey,
     filters.brand,
     filters.city,
     filters.startDate,
     filters.endDate,
-    JSON.stringify(groupBy ?? []),
-    JSON.stringify(filters.customers ?? []),
-    JSON.stringify(filters.items ?? []),
+    groupByKey,
+    customersKey,
+    itemsKey,
+    setPage,
   ]);
 
   useEffect(() => {
@@ -714,7 +726,6 @@ export default function SalesOrdersTable({
           return null;
         };
 
-        const beforeFilterCount = rowsWithUid.length;
         rowsWithUid = rowsWithUid.filter((r) => {
           const cust = r.Customer ?? "";
           const item = r.Item ?? r.ItemCode ?? "";
@@ -1185,6 +1196,8 @@ export default function SalesOrdersTable({
             string,
             unknown
           >;
+          // _dropVerifiedAt intentionally unused; reference to avoid lint
+          void _dropVerifiedAt;
           next[key] = rest as SalesOrderRow;
         }
         return next;
@@ -1223,7 +1236,7 @@ export default function SalesOrdersTable({
     } finally {
       setVerifying(false);
     }
-  }, [checked, rows, selectedColors]);
+  }, [checked, rows, selectedColors, setRows, setTotal]);
 
   /* ---------- UPDATED: Save Dispatched (sends New_Color / replaces color) ---------- */
 
@@ -1242,6 +1255,11 @@ export default function SalesOrdersTable({
         ).toUpperCase();
         const selectedNew = selectedColors[compositeKey] ?? r.New_Color ?? null;
         const finalColor = selectedNew ?? r.Color ?? null;
+        const uid = r.__uid ?? "";
+        const prodQty =
+          productionQtyByUid[uid] ??
+          (r.ProductionQty !== undefined ? r.ProductionQty : null);
+
         return {
           SO_No: r.SO_No ?? "",
           Customer: r.Customer ?? null,
@@ -1249,8 +1267,9 @@ export default function SalesOrdersTable({
           Old_Color: r.Color ?? null,
           New_Color: selectedNew ?? null,
           Color: finalColor,
+          ProductionQty: prodQty,
           Dispatched: true,
-        };
+        } as Record<string, unknown>;
       });
 
     if (selectedRows.length === 0) {
@@ -1313,12 +1332,20 @@ export default function SalesOrdersTable({
         }
         return next;
       });
+      // clear productionQty entries for dispatched rows
+      setProductionQtyByUid((prev) => {
+        const next = { ...prev };
+        for (const uid of selectedUids) {
+          if (uid in next) delete next[uid];
+        }
+        return next;
+      });
     } catch (e: unknown) {
       console.error("Save dispatched failed", e);
     } finally {
       setSaving(false);
     }
-  }, [checked, rows, selectedColors]);
+  }, [checked, rows, selectedColors, setRows, setTotal, productionQtyByUid]);
 
   /* ---------- render ---------- */
 
@@ -1423,58 +1450,51 @@ export default function SalesOrdersTable({
                     </div>
 
                     {!isCollapsed && (
-                      <table className="min-w-[1000px] w-full border-collapse table-auto">
-                        <thead>
-                          <tr className="text-left border-b">
-                            <th className="py-2 pr-4 align-top min-w-[64px]">
-                              Select
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[90px] whitespace-nowrap">
+                      <Table className="w-full border-collapse">
+                        <TableHeader>
+                          <TableRow className="border-b">
+                            <TableHead className="w-[64px]">Select</TableHead>
+                            <TableHead className="w-[90px] whitespace-nowrap">
                               SO No
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[110px] whitespace-nowrap">
+                            </TableHead>
+                            <TableHead className="w-[110px] whitespace-nowrap">
                               SO Date
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[260px]">
+                            </TableHead>
+                            <TableHead className="w-[260px]">
                               Customer
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[140px]">
+                            </TableHead>
+                            <TableHead className="w-[140px]">
                               Customer Type
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[90px]">
-                              Rating
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[120px]">
-                              Broker
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[72px]">
-                              File
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[140px]">
-                              Item
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[160px]">
-                              Concept
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[140px]">
-                              Fabric
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[110px]">
-                              Color
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[90px] whitespace-nowrap">
+                            </TableHead>
+                            <TableHead className="w-[90px]">Rating</TableHead>
+                            <TableHead className="w-[120px]">Broker</TableHead>
+                            <TableHead className="w-[72px]">File</TableHead>
+                            <TableHead className="w-[140px]">Item</TableHead>
+                            <TableHead className="w-[160px]">Concept</TableHead>
+                            <TableHead className="w-[140px]">Fabric</TableHead>
+                            <TableHead className="w-[110px]">Color</TableHead>
+                            <TableHead className="w-[90px] whitespace-nowrap">
                               Size
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[90px] whitespace-nowrap">
+                            </TableHead>
+                            <TableHead className="w-[90px] whitespace-nowrap">
                               Order Qty
-                            </th>
-                            <th className="py-2 pr-4 align-top min-w-[140px] whitespace-nowrap">
+                            </TableHead>
+                            <TableHead className="w-[120px] whitespace-nowrap">
+                              Qty in Production
+                            </TableHead>
+                            <TableHead className="w-[140px] whitespace-nowrap">
                               Stock
-                            </th>
-                          </tr>
-                        </thead>
+                            </TableHead>
+                            <TableHead className="w-[100px] whitespace-nowrap">
+                              Status
+                            </TableHead>
+                            <TableHead className="w-[60px] whitespace-nowrap text-center">
+                              Actions
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
 
-                        <tbody>
+                        <TableBody>
                           {g.rows.map((r, idx) => {
                             const rowUid = r.__uid ?? `__idx_${idx}`;
                             const compositeKey = makeDispatchKey(
@@ -1497,31 +1517,29 @@ export default function SalesOrdersTable({
                             const invoiceMatch = invoiceMap[invoiceKey];
 
                             return (
-                              <tr
+                              <TableRow
                                 key={`${g.key}-${rowUid}-${idx}`}
-                                className="border-b hover:bg-slate-50 cursor-pointer"
+                                className="cursor-pointer"
                                 onClick={() => toggleRowCheckedByUid(rowUid)}
                               >
-                                <td
-                                  className="py-2 pr-4 align-middle"
+                                <TableCell
+                                  className="text-center"
                                   onClick={(e) => e.stopPropagation()}
                                 >
-                                  <div className="flex items-center justify-center">
-                                    {renderCheckbox(rowUid)}
-                                  </div>
-                                </td>
+                                  {renderCheckbox(rowUid)}
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top whitespace-nowrap text-[13px]">
+                                <TableCell className="whitespace-nowrap text-[13px]">
                                   <span className="inline-block align-middle">
                                     {formatCell(r.SO_No)}
                                   </span>
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top whitespace-nowrap">
+                                <TableCell className="whitespace-nowrap">
                                   {formatCell(r.SO_Date)}
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top">
+                                <TableCell>
                                   <div className="max-w-[260px]">
                                     <div className="truncate">
                                       {formatCell(r.Customer)}
@@ -1542,28 +1560,25 @@ export default function SalesOrdersTable({
                                       </div>
                                     ) : null}
                                   </div>
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top">
+                                <TableCell>
                                   <div className="max-w-[140px] truncate">
                                     {formatCell(r.Customer_Type)}
                                   </div>
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top whitespace-nowrap">
+                                <TableCell className="whitespace-nowrap">
                                   {formatCell(r.Rating)}
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top">
+                                <TableCell>
                                   <div className="max-w-[120px] truncate">
                                     {formatCell(r.Broker)}
                                   </div>
-                                </td>
+                                </TableCell>
 
-                                <td
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="py-2 pr-4 align-top"
-                                >
+                                <TableCell onClick={(e) => e.stopPropagation()}>
                                   {r.File_URL ? (
                                     <button
                                       type="button"
@@ -1597,16 +1612,15 @@ export default function SalesOrdersTable({
                                   ) : (
                                     <span className="text-slate-400">—</span>
                                   )}
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top">
+                                <TableCell>
                                   <div className="max-w-[140px]">
                                     <div className="truncate">
                                       {formatCell(r.Item)}
                                     </div>
 
                                     {(() => {
-                                      // compute other SOs for this item (exclude current SO)
                                       const itemKey = normItemKey(
                                         r.Item ?? r.ItemCode ?? null
                                       );
@@ -1623,9 +1637,7 @@ export default function SalesOrdersTable({
                                       const otherCount = otherSos.length;
                                       if (otherCount === 0) return null;
 
-                                      // short label, tooltip shows actual SO numbers
                                       const tooltip = otherSos.join(", ");
-
                                       return (
                                         <div className="mt-1">
                                           <span
@@ -1640,22 +1652,22 @@ export default function SalesOrdersTable({
                                       );
                                     })()}
                                   </div>
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top">
+                                <TableCell>
                                   <div className="max-w-[160px] truncate">
                                     {formatCell(r.Concept)}
                                   </div>
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top">
+                                <TableCell>
                                   <div className="max-w-[140px] truncate">
                                     {formatCell(r.Fabric)}
                                   </div>
-                                </td>
+                                </TableCell>
 
                                 {/* Color cell: if New_Color exists show original struck-through and new pill below */}
-                                <td className="py-2 pr-4 align-top">
+                                <TableCell>
                                   <div className="max-w-[110px]">
                                     {selectedColorForThis ? (
                                       <div>
@@ -1674,71 +1686,92 @@ export default function SalesOrdersTable({
                                       </div>
                                     )}
                                   </div>
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top whitespace-nowrap">
+                                <TableCell className="whitespace-nowrap">
                                   {formatCell(r.Size)}
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top whitespace-nowrap">
+                                <TableCell className="whitespace-nowrap">
                                   {formatCell(r.OrderQty)}
-                                </td>
+                                </TableCell>
 
-                                <td className="py-2 pr-4 align-top whitespace-nowrap">
-                                  {r.StockByColor &&
-                                  Object.keys(r.StockByColor).length > 0 ? (
-                                    <div className="flex items-center gap-1 flex-wrap max-w-[280px]">
-                                      {Object.entries(r.StockByColor).map(
-                                        ([colorName, cs]) => {
-                                          const isSelected =
-                                            selectedColors[compositeKey] ===
-                                              colorName ||
-                                            (r.New_Color === colorName &&
-                                              !selectedColors[compositeKey]);
-                                          return (
-                                            <button
-                                              key={colorName}
-                                              type="button"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                toggleSelectColorForRow(
-                                                  r,
-                                                  colorName
-                                                );
-                                              }}
-                                              className={`text-[11px] inline-flex items-center gap-1 px-2 py-[4px] rounded-full border ${
-                                                isSelected
-                                                  ? "bg-emerald-100 text-emerald-800 border-emerald-200"
-                                                  : "bg-slate-100 text-slate-800 border-slate-200"
-                                              }`}
-                                              title={`${colorName}: ${cs}`}
-                                            >
-                                              <span className="hidden md:inline-block">
-                                                {colorName}
-                                              </span>
-                                              <span className="font-medium ml-1">
-                                                {cs}
-                                              </span>
-                                            </button>
-                                          );
-                                        }
-                                      )}
-                                    </div>
-                                  ) : typeof r.Stock === "number" ? (
-                                    r.Stock === 0 ? (
-                                      <span className="text-slate-500">0</span>
-                                    ) : (
-                                      String(r.Stock)
-                                    )
-                                  ) : (
-                                    <span className="text-slate-500">—</span>
-                                  )}
-                                </td>
-                              </tr>
+                                <TableCell
+                                  className="whitespace-nowrap"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    className="w-20 px-2 py-1 border rounded text-sm"
+                                    value={
+                                      productionQtyByUid[rowUid] ??
+                                      r.ProductionQty ??
+                                      ""
+                                    }
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      const n = v === "" ? null : Number(v);
+                                      setProductionQtyByUid((prev) => ({
+                                        ...prev,
+                                        [rowUid]: n,
+                                      }));
+                                    }}
+                                  />
+                                </TableCell>
+
+                                <TableCell className="whitespace-nowrap">
+                                  {/* Stock cell extracted to component */}
+                                  <StockCell
+                                    row={r}
+                                    compositeKey={compositeKey}
+                                    selectedColors={selectedColors}
+                                    toggleSelectColorForRow={
+                                      toggleSelectColorForRow
+                                    }
+                                  />
+                                </TableCell>
+
+                                <TableCell className="whitespace-nowrap">
+                                  {/* Status badge */}
+                                  <span
+                                    className={`inline-block px-2 py-1 rounded-full text-sm ${
+                                      r.Status === "Cancelled"
+                                        ? "bg-red-100 text-red-800"
+                                        : "bg-green-100 text-green-800"
+                                    }`}
+                                  >
+                                    {r.Status === "Cancelled"
+                                      ? "Cancelled"
+                                      : "Active"}
+                                  </span>
+                                </TableCell>
+
+                                <TableCell className="text-center">
+                                  <RowActions
+                                    row={r}
+                                    onCancel={(row) =>
+                                      setCancelDialogOrder(row)
+                                    }
+                                  />
+                                </TableCell>
+                              </TableRow>
                             );
                           })}
-                        </tbody>
-                      </table>
+
+                          {/* Cancel Order Dialog */}
+                          {cancelDialogOrder && (
+                            <CancelOrderDialog
+                              isOpen={!!cancelDialogOrder}
+                              onClose={() => setCancelDialogOrder(null)}
+                              onConfirm={() =>
+                                handleCancelOrder(cancelDialogOrder)
+                              }
+                              orderNo={cancelDialogOrder.SO_No || ""}
+                            />
+                          )}
+                        </TableBody>
+                      </Table>
                     )}
                   </div>
                 );

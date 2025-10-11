@@ -78,6 +78,7 @@ export default function TokenSearchBar({ tokens, onAdd, onRemove, onClear }: Pro
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => setValue(e.target.value)}
           onKeyDown={onKey}
           aria-label="Add token"
+          className="w-full"
         />
         <Button type="button" onClick={addFromValue} aria-label="Add token">
           +
